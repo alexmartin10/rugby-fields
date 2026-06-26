@@ -40,3 +40,8 @@ CHOICE : Use of IGN's BDORTHO https://cartes.gouv.fr/rechercher-une-donnee/datas
 High resolution, publicly available.
 Download of data for the Haute-Garonne departement for first exploration. Dataset at 7-zip format, divided in 8 directories. Each directory contains 1kmx1km squares of satellite images. The whole directory contains the images for a department.
 ![alt text](image.png)
+
+## 26/06/2026
+
+Creation of pipeline to pre-annotate data with bounding boxes thanks to coordinates gathered on OpenStreetMap.
+Installed rasterio to handle files georeferenced (.tif, raw data from IGN's database), geopandas to manipulate them (add bounding boxes etc...).
