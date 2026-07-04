@@ -2,13 +2,13 @@ import rasterio
 import geopandas
 import random
 from shapely.geometry import box
+import numpy as np
 
+from PIL import Image
 from pathlib import Path
 from rasterio.windows import Window
 from rasterio.io import DatasetReader
-from rasterio.profiles import Profile
 from geopandas import GeoDataFrame
-from shapely.geometry.polygon import Polygon
 
 def round_to_lower_multiple_of_5(n: int) -> int:
     if not isinstance(n, int) or n < 0:
@@ -66,32 +66,21 @@ def calculate_yolo_coordinates(
 
 def generate_yolo_format_crop_from_window(
         src: DatasetReader,
-        profile: Profile,
         window: Window,
         path_yolo_dataset: Path,
         crop_index: int,
-        img_size: int,
         gdf: GeoDataFrame
 ):
 
-    cropped_image = src.read((1, 2, 3), window=window)
-    transform = src.window_bounds(window)
-    profile.update({
-        "driver": "JPEG",
-        "height": int(window.height),
-        "width": int(window.width),
-        "transform": transform
-    })
-    with rasterio.open(
-        path_yolo_dataset.joinpath(f"images/img_{crop_index}.jpg").resolve(),
-        "w",
-        **profile
-    ) as dst:
-        dst.write(cropped_image)
-        xmin_img, ymax_img = transform * (0, 0)
-        xmax_img, ymin_img = transform * (window.height, window.width)
-        
-    dst.close()
+    cropped_image = src.read((1, 2, 3), window=window) # shape: (bands, h, w)
+
+    img = np.transpose(cropped_image, (1, 2, 0))  # -> (h, w, bands)
+
+    Image.fromarray(img).save(path_yolo_dataset / f"images/img_{crop_index}.jpg")
+
+    transform = src.window_transform(window)
+    xmin_img, ymax_img = transform * (0, 0)
+    xmax_img, ymin_img = transform * (window.height, window.width)
 
     crop_geom = box(xmin_img, ymin_img, xmax_img, ymax_img)
 
@@ -179,11 +168,9 @@ def crop_images(
 
         generate_yolo_format_crop_from_window(
             src,
-            src.profile.copy(),
             window_centered,
             path_yolo_dataset,
             index,
-            img_size,
             gdf
         )
 
@@ -194,11 +181,9 @@ def crop_images(
         
         generate_yolo_format_crop_from_window(
             src,
-            src.profile.copy(),
             window_centered_zoomed,
             path_yolo_dataset,
             index,
-            img_size_zoomed,
             gdf
         )
 
@@ -209,11 +194,9 @@ def crop_images(
 
         generate_yolo_format_crop_from_window(
             src,
-            src.profile.copy(),
             window_shifted,
             path_yolo_dataset,
             index,
-            img_size,
             gdf
         )
 
@@ -282,12 +265,11 @@ def main():
     base = p.parent.parent
     path_raw_data = base.joinpath("data/raw/data-ign/D31/BDORTHO_2-0_RVB-0M20_JP2-E080_LAMB93_D031_2025-01-01/ORTHOHR/1_DONNEES_LIVRAISON_2026-04-00085/OHR_RVB_0M20_JP2-E080_LAMB93_D31-2025")
     path_yolo_dataset = base.joinpath("data/yolo").resolve()    
-    gdf = geopandas.read_file(base.joinpath("data/raw/osm/export.geojson"))
+    gdf = geopandas.read_file(base.joinpath("data/raw/osm/export_rugby.geojson"))
     gdf = gdf[["sport", "geometry"]]
-    gdf_rugby = gdf[gdf["sport"].str.contains("rugby", na=False)]
 
-    extract_all_crops_from_gdf(gdf_rugby, path_raw_data, path_yolo_dataset)
-    # extract_crops_from_one(gdf_rugby, path_raw_data, p, 12)
+    extract_all_crops_from_gdf(gdf, path_raw_data, path_yolo_dataset)
+    # extract_crops_from_one(gdf, path_raw_data, p, 50)
 
 
 if __name__ == "__main__":
