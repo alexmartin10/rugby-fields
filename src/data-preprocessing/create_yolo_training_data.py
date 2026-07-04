@@ -75,11 +75,12 @@ def generate_yolo_format_crop_from_window(
 ):
 
     cropped_image = src.read((1, 2, 3), window=window)
+    transform = src.window_bounds(window)
     profile.update({
         "driver": "JPEG",
         "height": int(window.height),
         "width": int(window.width),
-        "transform": src.window_transform(window)
+        "transform": transform
     })
     with rasterio.open(
         path_yolo_dataset.joinpath(f"images/img_{crop_index}.jpg").resolve(),
@@ -87,8 +88,8 @@ def generate_yolo_format_crop_from_window(
         **profile
     ) as dst:
         dst.write(cropped_image)
-        xmin_img, ymax_img = dst.xy(0, 0)
-        xmax_img, ymin_img = dst.xy(img_size, img_size)
+        xmin_img, ymax_img = transform * (0, 0)
+        xmax_img, ymin_img = transform * (window.height, window.width)
         
     dst.close()
 
