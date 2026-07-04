@@ -50,11 +50,11 @@ def calculate_yolo_coordinates(
     xmax_img, ymin_img, same but for the bottom right pixel, position (img_size, img_size)
     xmin, xmax, ymin, ymax are the bounds given by OSM.
     """
-    # #make sure bounds for the fields are inside the crop
-    # xmin = max(xmin, xmin_img)
-    # xmax = min(xmax, xmax_img)
-    # ymin = max(ymin, ymin_img)
-    # ymax = min(ymax, ymax_img)
+    #make sure bounds for the fields are inside the crop
+    xmin = max(xmin, xmin_img)
+    xmax = min(xmax, xmax_img)
+    ymin = max(ymin, ymin_img)
+    ymax = min(ymax, ymax_img)
 
     x_center = abs((x_field_center - xmin_img) / (xmax_img - xmin_img))
     y_center = abs((y_field_center - ymin_img) / (ymax_img - ymin_img))
@@ -127,6 +127,17 @@ def generate_yolo_format_crop_from_window(
         
     f.close()
 
+def clamp_window(col: int, row: int, size: int, src: DatasetReader):
+    col_off = col - size // 2
+    row_off = row - size // 2
+
+    col_off = max(0, col_off)
+    row_off = max(0, row_off)
+
+    col_off = min(col_off, src.width - size)
+    row_off = min(row_off, src.height - size)
+
+    return Window(col_off, row_off, size, size)
 
 def crop_images(
         geometry,
@@ -160,13 +171,11 @@ def crop_images(
     with rasterio.open(path_raw_data.joinpath(file_name)) as src:
         row, col = src.index(x, y)
 
+        if img_size > min(src.width, src.height):
+            raise ValueError("Crop image size must be lower than original image size.")
         ## centered
-        window_centered = Window(
-            col - int(img_size / 2),
-            row - int(img_size / 2),
-            img_size,
-            img_size
-        )
+        window_centered = clamp_window(col, row, img_size, src)
+
         generate_yolo_format_crop_from_window(
             src,
             src.profile.copy(),
@@ -180,12 +189,8 @@ def crop_images(
         index += 1
 
         ## zoomed in
-        window_centered_zoomed = Window(
-            col - int(img_size_zoomed / 2),
-            row - int(img_size_zoomed / 2),
-            img_size_zoomed,
-            img_size_zoomed
-        )
+        window_centered_zoomed = clamp_window(col, row, img_size_zoomed, src)
+        
         generate_yolo_format_crop_from_window(
             src,
             src.profile.copy(),
@@ -199,12 +204,8 @@ def crop_images(
         index += 1
 
         ##shifted randomly
-        window_shifted = Window(
-            col - int(img_size / 2) - dx,
-            row - int(img_size / 2) - dy,
-            img_size,
-            img_size
-        )
+        window_shifted = clamp_window(col - dx, row - dy, img_size, src)
+
         generate_yolo_format_crop_from_window(
             src,
             src.profile.copy(),
@@ -249,6 +250,32 @@ def extract_all_crops_from_gdf(
         if (i+1) % 10 == 0:
             print(f"{i+1} / {n_fields} done")
 
+def extract_crops_from_one(
+        gdf: GeoDataFrame,
+        path_raw_data: Path,
+        path_yolo_dataset: Path,
+        index_in_gdf: int
+    ):
+    """
+    path_to_dir is the path to the directory where crops are stored. Starts from the project base
+    directory. 
+    """
+    if gdf.crs.name != "RGF93 v2b / Lambert-93":
+        gdf = gdf.to_crs('EPSG:9794')
+        print("Coordinates system changed to Lambert 93.")
+
+    field = gdf.iloc[index_in_gdf]
+    geom = field.geometry
+
+    crop_images(
+        geom,
+        path_raw_data,
+        path_yolo_dataset,
+        index=0,
+        crops_made_from_img=3,
+        gdf=gdf
+    )
+
 def main():
     p = Path().resolve()
     base = p.parent.parent
@@ -259,6 +286,8 @@ def main():
     gdf_rugby = gdf[gdf["sport"].str.contains("rugby", na=False)]
 
     extract_all_crops_from_gdf(gdf_rugby, path_raw_data, path_yolo_dataset)
+    # extract_crops_from_one(gdf_rugby, path_raw_data, p, 12)
+
 
 if __name__ == "__main__":
     main()
