@@ -31,10 +31,8 @@ def make_file_name(departement: int, year, x_bound, y_bound):
 
 
 def crop_images_from_geom(geometry, path_raw_data: Path, path_save_images: Path, img_size=1024):
-    xmin, ymin, xmax, ymax = geometry.bounds
 
     img_size_zoomed = int(0.9 * img_size)
-    imgs = {}
     dx = int(random.uniform(-0.1, 0.1) * img_size_zoomed)
     dy = int(random.uniform(-0.1, 0.1) * img_size_zoomed)
 
