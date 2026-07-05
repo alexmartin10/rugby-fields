@@ -136,6 +136,8 @@ def crop_images(
         index: int,
         crops_made_from_img,
         gdf,
+        departement,
+        year_orthophtos,
         img_size=2048,
     ):
     #multiply index by number of crops made with one image, here 4 (centered, zoomed, shifted x2), to
@@ -151,12 +153,12 @@ def crop_images(
     y = geometry.centroid.y
 
     x_km = int(x / 1000)
-    y_km = int(y / 1000)
+    y_km = int(y / 1000) + 1
 
     x_km = round_to_lower_multiple_of_5(x_km)
     y_km = round_to_higher_multiple_of_5(y_km)
 
-    file_name = make_file_name(31, 2025, x_km, y_km)
+    file_name = make_file_name(departement, year_orthophtos, x_km, y_km)
 
     with rasterio.open(path_raw_data.joinpath(file_name)) as src:
         row, col = src.index(x, y)
@@ -206,7 +208,8 @@ def crop_images(
 def extract_all_crops_from_gdf(
         gdf: GeoDataFrame,
         path_raw_data: Path,
-        path_yolo_dataset: Path
+        path_yolo_dataset: Path,
+        index_start=0
     ):
     """
     path_to_dir is the path to the directory where crops are stored. Starts from the project base
@@ -226,9 +229,11 @@ def extract_all_crops_from_gdf(
             geom,
             path_raw_data,
             path_yolo_dataset,
-            index=i,
+            index=i + index_start,
             crops_made_from_img=3,
-            gdf=gdf
+            gdf=gdf,
+            departement=31,
+            year_orthophtos=2025
         )
 
         if (i+1) % 10 == 0:
@@ -257,19 +262,21 @@ def extract_crops_from_one(
         path_yolo_dataset,
         index=0,
         crops_made_from_img=3,
-        gdf=gdf
+        gdf=gdf,
+        departement=31,
+        year_orthophtos=2025
     )
 
 def main():
     p = Path().resolve()
     base = p.parent.parent
     path_raw_data = base.joinpath("data/raw/data-ign/D31/BDORTHO_2-0_RVB-0M20_JP2-E080_LAMB93_D031_2025-01-01/ORTHOHR/1_DONNEES_LIVRAISON_2026-04-00085/OHR_RVB_0M20_JP2-E080_LAMB93_D31-2025")
-    path_yolo_dataset = base.joinpath("data/yolo").resolve()    
+    path_yolo_dataset = base.joinpath("data/yolo_dataset").resolve()    
     gdf = geopandas.read_file(base.joinpath("data/raw/osm/export_rugby.geojson"))
     gdf = gdf[["sport", "geometry"]]
 
     extract_all_crops_from_gdf(gdf, path_raw_data, path_yolo_dataset)
-    # extract_crops_from_one(gdf, path_raw_data, p, 50)
+    # extract_crops_from_one(gdf, path_raw_data, p, 11)
 
 
 if __name__ == "__main__":
