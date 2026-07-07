@@ -9,6 +9,7 @@ from pathlib import Path
 from rasterio.windows import Window
 from rasterio.io import DatasetReader
 from geopandas import GeoDataFrame
+from shapely.geometry.polygon import Polygon
 
 def round_to_lower_multiple_of_5(n: int) -> int:
     if not isinstance(n, int) or n < 0:
@@ -70,7 +71,7 @@ def generate_yolo_format_crop_from_window(
         path_yolo_dataset: Path,
         crop_index: int,
         gdf: GeoDataFrame
-):
+) -> Polygon:
 
     cropped_image = src.read((1, 2, 3), window=window) # shape: (bands, h, w)
 
@@ -113,9 +114,10 @@ def generate_yolo_format_crop_from_window(
                     ymax
                 )
                 f.write(f"0 {x_center:.6f} {y_center:.6f} {widht:.6f} {height:.6f}\n")
-
         
     f.close()
+
+    return crop_geom
 
 def clamp_window(col: int, row: int, size: int, src: DatasetReader):
     col_off = col - size // 2
@@ -168,7 +170,7 @@ def crop_images(
         ## centered
         window_centered = clamp_window(col, row, img_size, src)
 
-        generate_yolo_format_crop_from_window(
+        crop_geom_centered = generate_yolo_format_crop_from_window(
             src,
             window_centered,
             path_yolo_dataset,
@@ -181,7 +183,7 @@ def crop_images(
         ## zoomed in
         window_centered_zoomed = clamp_window(col, row, img_size_zoomed, src)
         
-        generate_yolo_format_crop_from_window(
+        crop_geom_zoomed = generate_yolo_format_crop_from_window(
             src,
             window_centered_zoomed,
             path_yolo_dataset,
@@ -194,7 +196,7 @@ def crop_images(
         ##shifted randomly
         window_shifted = clamp_window(col - dx, row - dy, img_size, src)
 
-        generate_yolo_format_crop_from_window(
+        crop_geom_shifted = generate_yolo_format_crop_from_window(
             src,
             window_shifted,
             path_yolo_dataset,
@@ -204,17 +206,23 @@ def crop_images(
 
     src.close()
 
+    return [crop_geom_centered, crop_geom_zoomed, crop_geom_shifted]
+
 
 def extract_all_crops_from_gdf(
         gdf: GeoDataFrame,
         path_raw_data: Path,
         path_yolo_dataset: Path,
+        path_save_crop_geometries: Path,
         index_start=0
     ):
     """
-    path_to_dir is the path to the directory where crops are stored. Starts from the project base
-    directory. 
+    path_save_crop_geometries is the path to which we save the gdf containing the geometry of all the
+    images we cropped. We then use it to create the negative dataset (containing no rugby fields).
+
     """
+    all_geoms = []
+
     if gdf.crs.name != "RGF93 v2b / Lambert-93":
         gdf = gdf.to_crs('EPSG:9794')
         print("Coordinates system changed to Lambert 93.")
@@ -225,7 +233,7 @@ def extract_all_crops_from_gdf(
         field = gdf.iloc[i]
         geom = field.geometry
 
-        crop_images(
+        geom_list = crop_images(
             geom,
             path_raw_data,
             path_yolo_dataset,
@@ -236,8 +244,13 @@ def extract_all_crops_from_gdf(
             year_orthophtos=2025
         )
 
+        all_geoms += geom_list
+
         if (i+1) % 10 == 0:
             print(f"{i+1} / {n_fields} done")
+    
+    gdf_boxes = GeoDataFrame(geometry=all_geoms, crs='EPSG:9794')
+    gdf_boxes.to_file(path_save_crop_geometries, driver="GeoJSON")
 
 def extract_crops_from_one(
         gdf: GeoDataFrame,
@@ -271,11 +284,12 @@ def main():
     p = Path().resolve()
     base = p.parent.parent
     path_raw_data = base.joinpath("data/raw/data-ign/D31/BDORTHO_2-0_RVB-0M20_JP2-E080_LAMB93_D031_2025-01-01/ORTHOHR/1_DONNEES_LIVRAISON_2026-04-00085/OHR_RVB_0M20_JP2-E080_LAMB93_D31-2025")
-    path_yolo_dataset = base.joinpath("data/yolo_dataset").resolve()    
+    path_yolo_dataset = base.joinpath("data/yolo_dataset").resolve()
+    path_save_crop_geom = base / "data/yolo_images_geom/crops_geom.json"
     gdf = geopandas.read_file(base.joinpath("data/raw/osm/export_rugby.geojson"))
     gdf = gdf[["sport", "geometry"]]
 
-    extract_all_crops_from_gdf(gdf, path_raw_data, path_yolo_dataset)
+    extract_all_crops_from_gdf(gdf, path_raw_data, path_yolo_dataset, path_save_crop_geom)
     # extract_crops_from_one(gdf, path_raw_data, p, 11)
 
 
