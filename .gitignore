@@ -22,3 +22,6 @@ wheels/
 /models
 *.pt
 *.pth
+
+#Archive
+/archive
