@@ -20,3 +20,5 @@ wheels/
 
 #Models
 /models
+*.pt
+*.pth
