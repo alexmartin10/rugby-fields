@@ -75,7 +75,7 @@ The pipeline automatically:
 
 The complete data generation pipeline is illustrated below.
 
-![alt text](docs/schema_pipeline_data.png)
+![alt text](docs/screens/schema_pipeline_data.png)
 
 Since OpenStreetMap data is not always perfectly up to date, every crop
 is manually verified before training.
@@ -102,7 +102,7 @@ and other visually similar areas to reduce false positives.
 Bounding boxes were manually corrected using Label Studio.
 
 Example of a crop annotated on Label Studio :
-![alt text](docs/crop_annotated_example.png)
+![alt text](docs/screens/crop_annotated_example.png)
 
 ------------------------------------------------------------------------
 
@@ -138,7 +138,7 @@ Results:
 Training curves showed that the model was still improving after 30
 epochs.
 
-![alt text](models/yolo26n/v1_640_30e/results.png)
+![alt text](docs/screens/results_v1_640_30e.png)
 
 ## Current best experiment
 
@@ -156,7 +156,7 @@ false positive rate.
 
 Example prediction on the facilities of the greatest club in the world (Stade Toulousain) :
 
-![alt text](runs/detect/predict-2/pos_00001.jpg)
+![alt text](docs/screens/pos_00001.jpg)
 
 | Metric    | Value |
 | --------- | ----: |
@@ -167,7 +167,7 @@ Example prediction on the facilities of the greatest club in the world (Stade To
 
 The remaining failures mostly correspond to poorly contrasted fields with barely visible markings.
 
-![alt text](runs/detect/predict-2/pos_00002.jpg)
+![alt text](docs/screens/pos_00002.jpg)
 ------------------------------------------------------------------------
 
 # Repository structure
