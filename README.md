@@ -1,34 +1,216 @@
-# Rugby fields
+# Rugby Fields
 
-A personnal computer vision project with the ultimate goal of counting the number of rugby fields in 
-France.
+A computer vision project aiming to automatically detect rugby fields on
+high-resolution aerial imagery.
 
-Made to develop my CV skills, and get more confortable with the most used tools in this sector.
+The long-term objective is to build a complete pipeline capable of
+estimating the number and location of rugby fields across France using
+publicly available geographic data.
 
----
+This project started as a personal challenge to build an end-to-end 
+computer vision pipeline, from geospatial data processing to object 
+detection on aerial imagery.
 
-## Project Scope
+------------------------------------------------------------------------
 
-Goal
-Detect and localize sports fields in satellite imagery as a first step toward rugby field identification.
+# Project overview
 
-Output
-Bounding boxes around detected fields.
+Unlike many computer vision projects, no annotated dataset exists for
+this task.
 
-Success Metrics
-- mAP@50 ≥ 0.75
-- Recall ≥ 0.90
-- Precision ≥ 0.85
+Instead of manually collecting thousands of images, this project focuses 
+on building an automated pipeline to generate a training dataset from public 
+geospatial data, which represents the core challenge of the project.
 
-Constraints
-- No annotated dataset available
-- Limited compute resources
-- Satellite imagery only
-- Small-scale manual labeling
+The workflow is:
 
-MVP (v1)
-Detect sports fields regardless of sport type.
+``` text
+OpenStreetMap
+        │
+        ▼
+Rugby field geometries
+        │
+        ▼
+IGN BD ORTHO aerial imagery
+        │
+        ▼
+Automatic crop extraction
+        │
+        ▼
+Manual verification & annotation
+        │
+        ▼
+YOLO dataset
+        │
+        ▼
+Model training
+        │
+        ▼
+Detection on unseen orthophotos
+```
 
-Future Versions
-- V2: classify field type (rugby, football, etc.)
-- V3: end-to-end rugby field detection and classification
+------------------------------------------------------------------------
+
+# Dataset generation
+
+The dataset is entirely built from publicly available data.
+
+## Imagery
+
+-   IGN BD ORTHO (https://www.data.gouv.fr/datasets/bd-ortho-r)
+-   20 cm spatial resolution
+-   Initial experiments performed on the Haute-Garonne department
+
+## Field locations
+
+Field geometries are extracted from OpenStreetMap using Overpass
+queries.
+
+The pipeline automatically:
+
+-   converts coordinates from WGS84 to Lambert-93;
+-   finds the corresponding orthophoto tile;
+-   extracts several crops around each field;
+-   generates initial YOLO annotations.
+
+The complete data generation pipeline is illustrated below.
+
+![alt text](docs/schema_pipeline_data.png)
+
+Since OpenStreetMap data is not always perfectly up to date, every crop
+is manually verified before training.
+
+------------------------------------------------------------------------
+
+# Dataset v1
+
+The first version of the dataset was entirely built in-house. The goal was 
+not only to collect positive samples, but also difficult negative examples 
+to improve the robustness of the detector.
+
+Current dataset:
+
+  Type                 Images
+  ------------------ --------
+  Rugby fields            276
+  Negative samples        509
+  Total                   785
+
+Negative samples intentionally include football fields, athletics tracks
+and other visually similar areas to reduce false positives.
+
+Bounding boxes were manually corrected using Label Studio.
+
+Example of a crop annotated on Label Studio :
+![alt text](docs/crop_annotated_example.png)
+
+------------------------------------------------------------------------
+
+# Model
+
+Current detector:
+
+-   YOLO26n
+-   Single class (`rugby_field`)
+
+Training performed on Google Colab.
+
+------------------------------------------------------------------------
+
+# Results
+
+## Baseline
+
+  Parameter    Value
+  ------------ ---------
+  Model        YOLO26n
+  Image size   640 px
+  Epochs       30
+  Batch size   4
+
+Results:
+
+-   Precision ≈ 0.65
+-   Recall ≈ 0.79
+-   mAP50 ≈ 0.78
+-   mAP50-95 ≈ 0.66
+
+Training curves showed that the model was still improving after 30
+epochs.
+
+![alt text](models/yolo26n/v1_640_30e/results.png)
+
+## Current best experiment
+
+  Parameter    Value
+  ------------ ---------
+  Model        YOLO26n
+  Image size   1024 px
+  Epochs       100
+  Batch size   4
+
+Results:
+
+The model successfully detects most rugby fields while maintaining a low
+false positive rate.
+
+Example prediction on the facilities of the greatest club in the world (Stade Toulousain) :
+
+![alt text](runs/detect/predict-2/pos_00001.jpg)
+
+| Metric    | Value |
+| --------- | ----: |
+| Precision |  0.90 |
+| Recall    |  0.92 |
+| mAP50     | 0.967 |
+| mAP50-95  |  0.86 |
+
+The remaining failures mostly correspond to poorly contrasted fields with barely visible markings.
+
+![alt text](runs/detect/predict-2/pos_00002.jpg)
+------------------------------------------------------------------------
+
+# Repository structure
+
+## Repository structure
+
+```text
+rugby-fields/
+├── configs/
+├── data/
+│   └── yolo_dataset/
+├── docs/
+├── experiments/
+├── models/
+├── src/
+└── README.md
+```
+
+The dataset, training configuration and trained models are versioned
+independently to ensure experiments remain reproducible.
+
+
+-----------------------------------------------------------------------
+
+# Technical stack
+
+- Python
+- PyTorch
+- Ultralytics YOLO26
+- Rasterio
+- GeoPandas
+- PyProj
+- OpenStreetMap
+- IGN BD ORTHO
+- Label Studio
+- QGIS
+- Google Colab
+
+------------------------------------------------------------------------
+
+# Next steps
+
+-   Increase dataset diversity with more departments.
+-   Improve discrimination between rugby and football fields.
+-   Run inference on complete orthophoto tiles.
+-   Build a nationwide detection pipeline.
