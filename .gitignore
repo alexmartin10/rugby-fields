@@ -7,10 +7,16 @@ wheels/
 *.egg-info
 
 # Virtual environments
-.venv
+.venv*
 
 #Data
 /data
 
 #Docs
 /docs
+
+#Runs
+/runs
+
+#Models
+/models
