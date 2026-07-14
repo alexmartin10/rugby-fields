@@ -119,6 +119,8 @@ Training performed on Google Colab.
 
 # Results
 
+These metrics were obtained on the current internal validation split. Because the dataset contains geographically and visually related crops, they should be considered preliminary and may overestimate performance on entirely unseen regions. A geographically separated test set is currently being developed.
+
 ## Baseline
 
   Parameter    Value
@@ -151,8 +153,7 @@ epochs.
 
 Results:
 
-The model successfully detects most rugby fields while maintaining a low
-false positive rate.
+Initial results are promising on the current validation set, but further evaluation on geographically independent imagery is required before drawing conclusions about generalization.
 
 Example prediction on the facilities of the greatest club in the world (Stade Toulousain) :
 
