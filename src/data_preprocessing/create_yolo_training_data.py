@@ -214,6 +214,8 @@ def extract_all_crops_from_gdf(
         path_raw_data: Path,
         path_yolo_dataset: Path,
         path_save_crop_geometries: Path,
+        departement: int,
+        year_orthophotos: int,
         index_start=0
     ):
     """
@@ -240,8 +242,8 @@ def extract_all_crops_from_gdf(
             index=i + index_start,
             crops_made_from_img=3,
             gdf=gdf,
-            departement=31,
-            year_orthophtos=2025
+            departement=departement,
+            year_orthophtos=year_orthophotos
         )
 
         all_geoms += geom_list
@@ -281,15 +283,14 @@ def extract_crops_from_one(
     )
 
 def main():
-    p = Path().resolve()
-    base = p.parent.parent
-    path_raw_data = base.joinpath("data/raw/data-ign/D31/BDORTHO_2-0_RVB-0M20_JP2-E080_LAMB93_D031_2025-01-01/ORTHOHR/1_DONNEES_LIVRAISON_2026-04-00085/OHR_RVB_0M20_JP2-E080_LAMB93_D31-2025")
-    path_yolo_dataset = base.joinpath("data/yolo_dataset").resolve()
-    path_save_crop_geom = base / "data/yolo_images_geom/crops_geom.json"
-    gdf = geopandas.read_file(base.joinpath("data/raw/osm/export_rugby.geojson"))
-    gdf = gdf[["sport", "geometry"]]
+    base = Path().resolve()
+    path_raw_data = base / "data/raw/D33/data_ign/BDORTHO_2-0_RVB-0M20_JP2-E080_LAMB93_D033_2024-01-01/ORTHOHR/1_DONNEES_LIVRAISON_2024-10-00207/OHR_RVB_0M20_JP2-E080_LAMB93_D33-2024"
+    path_yolo_dataset = base / "data/raw/D33/yolo_positives"
+    path_save_crop_geom = base / "data/raw/D33/geom_rugby_fields/crops_geom.json"
+    gdf = geopandas.read_file(base / "data/raw/D33/osm/export_rugby.geojson")
+    gdf = gdf[["sport", "geometry"]][:35]
 
-    extract_all_crops_from_gdf(gdf, path_raw_data, path_yolo_dataset, path_save_crop_geom)
+    extract_all_crops_from_gdf(gdf, path_raw_data, path_yolo_dataset, path_save_crop_geom, 33, 2024)
     # extract_crops_from_one(gdf, path_raw_data, p, 11)
 
 

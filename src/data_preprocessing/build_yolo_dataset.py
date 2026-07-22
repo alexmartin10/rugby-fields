@@ -9,16 +9,16 @@ import random
 import shutil
 
 # À adapter
-POS_IMAGES_DIR = Path("data/yolo_positives/images")
-POS_LABELS_DIR = Path("data/yolo_positives/labels")
+POS_IMAGES_DIR = Path("data/raw/D33/yolo_positives/images")
+POS_LABELS_DIR = Path("data/raw/D33/yolo_positives/labels")
 
-NEG_IMAGES_DIR = Path("data/yolo_negatives/images")
-NEG_LABELS_DIR = Path("data/yolo_negatives/labels")  # peut ne pas exister
+NEG_IMAGES_DIR = Path("data/raw/D33/yolo_negatives/images")
+NEG_LABELS_DIR = Path("data/raw/D33/yolo_negatives/labels")  # peut ne pas exister
 
-OUT_DIR = Path("data/yolo_dataset")
+OUT_DIR = Path("data/external_test_gironde")
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
-SPLIT_RATIOS = {"train": 0.7, "val": 0.2, "test": 0.1}
+SPLIT_RATIOS = {"train": 0, "val": 0, "test": 1}
 
 random.seed(42)
 

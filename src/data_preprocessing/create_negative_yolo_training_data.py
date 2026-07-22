@@ -202,8 +202,8 @@ def extract_all_crops_from_gdf(
                 path_yolo_dataset,
                 index=fields_extracted + index_start,
                 crops_made_from_img=crops_made_from_img,
-                departement=31,
-                year_orthophtos=2025
+                departement=33,
+                year_orthophtos=2024
             )
             fields_extracted += 1
 
@@ -243,14 +243,13 @@ def extract_crops_from_one(
     )
 
 def main():
-    p = Path().resolve()
-    base = p.parent.parent
-    path_raw_data = base.joinpath("data/raw/data-ign/D31/BDORTHO_2-0_RVB-0M20_JP2-E080_LAMB93_D031_2025-01-01/ORTHOHR/1_DONNEES_LIVRAISON_2026-04-00085/OHR_RVB_0M20_JP2-E080_LAMB93_D31-2025")
-    path_yolo_dataset = base.joinpath("data/yolo_dataset_negative").resolve()    
+    base = Path().resolve()
+    path_raw_data = base / "data/raw/D33/data_ign/BDORTHO_2-0_RVB-0M20_JP2-E080_LAMB93_D033_2024-01-01/ORTHOHR/1_DONNEES_LIVRAISON_2024-10-00207/OHR_RVB_0M20_JP2-E080_LAMB93_D33-2024"
+    path_yolo_dataset = base / "data/raw/D33/yolo_negatives"
 
-    gdf_crops_rugby = geopandas.read_file(base / "data/yolo_images_geom/crops_geom.json")
+    gdf_crops_rugby = geopandas.read_file(base / "data/raw/D33/geom_rugby_fields/crops_geom.json")
 
-    gdf = geopandas.read_file(base.joinpath("data/raw/osm/export_all_fields.geojson"))
+    gdf = geopandas.read_file(base / "data/raw/D33/osm/export_all_fields.geojson")
     gdf = gdf[["sport", "geometry"]]
     gdf = gdf[gdf["sport"].str.contains("football|soccer|athletics", na=False)]
 
@@ -259,15 +258,16 @@ def main():
         path_raw_data,
         path_yolo_dataset,
         gdf_crops_rugby,
-        crops_made_from_img=2
+        crops_made_from_img=2,
+        n_negative_fields=100
     )
 
     crop_random_image(
     path_raw_data=path_raw_data,
-    n_images_to_crop=100,
+    n_images_to_crop=50,
     gdf_boxes_rugby=gdf_crops_rugby,
     path_yolo_dataset=path_yolo_dataset,
-    index=430
+    index=200
     )
     # extract_crops_from_one(gdf, path_raw_data, p, 11)
 

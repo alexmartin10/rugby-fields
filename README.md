@@ -1,37 +1,29 @@
 # Rugby Fields
 
-A computer vision project aiming to automatically detect rugby fields on
-high-resolution aerial imagery.
+A computer vision project aiming to automatically detect rugby fields on high-resolution aerial imagery.
 
-The long-term objective is to build a complete pipeline capable of
-estimating the number and location of rugby fields across France using
-publicly available geographic data.
+The long-term objective is to build a complete geospatial pipeline capable of estimating the number and location of rugby fields across France using publicly available geographic data.
 
-This project started as a personal challenge to build an end-to-end 
-computer vision pipeline, from geospatial data processing to object 
-detection on aerial imagery.
+Unlike many object detection projects, this work does not rely on an existing dataset. Instead, the project focuses on building an end-to-end workflow, from automatic dataset generation to large-scale inference on orthophotos.
 
-------------------------------------------------------------------------
+---
 
 # Project overview
 
-Unlike many computer vision projects, no annotated dataset exists for
-this task.
+No public dataset exists for rugby field detection on aerial imagery.
 
-Instead of manually collecting thousands of images, this project focuses 
-on building an automated pipeline to generate a training dataset from public 
-geospatial data, which represents the core challenge of the project.
+Rather than manually collecting thousands of annotated images, this project builds an automated pipeline that generates a training dataset from public geospatial data before training a YOLO detector.
 
-The workflow is:
+The complete workflow is illustrated below.
 
-``` text
+```text
 OpenStreetMap
         │
         ▼
-Rugby field geometries
+Field geometries
         │
         ▼
-IGN BD ORTHO aerial imagery
+IGN BD ORTHO imagery
         │
         ▼
 Automatic crop extraction
@@ -46,10 +38,10 @@ YOLO dataset
 Model training
         │
         ▼
-Detection on unseen orthophotos
+Inference on complete orthophotos
 ```
 
-------------------------------------------------------------------------
+---
 
 # Dataset generation
 
@@ -84,17 +76,15 @@ is manually verified before training.
 
 # Dataset v1
 
-The first version of the dataset was entirely built in-house. The goal was 
-not only to collect positive samples, but also difficult negative examples 
-to improve the robustness of the detector.
+The first version of the dataset was entirely built in-house.
 
-Current dataset:
+The objective was not only to collect rugby fields but also difficult negative examples to reduce false detections.
 
-  Type                 Images
-  ------------------ --------
-  Rugby fields            276
-  Negative samples        509
-  Total                   785
+| Type             |  Images |
+| ---------------- | ------: |
+| Rugby fields     |     276 |
+| Negative samples |     509 |
+| **Total**        | **785** |
 
 Negative samples intentionally include football fields, athletics tracks
 and other visually similar areas to reduce false positives.
@@ -171,9 +161,42 @@ The remaining failures mostly correspond to poorly contrasted fields with barely
 ![alt text](docs/screens/pos_00002.jpg)
 ------------------------------------------------------------------------
 
-# Repository structure
+# Inference pipeline
 
-## Repository structure
+The project now includes a complete inference pipeline capable of processing full-resolution IGN BD ORTHO tiles instead of isolated image crops.
+
+The pipeline automatically:
+
+* converts JP2 orthophotos into RGB images;
+* splits each orthophoto into inference tiles;
+* runs YOLO detection on every tile;
+* converts detections back into Lambert-93 coordinates;
+* merges overlapping predictions using Non-Maximum Suppression;
+* exports the final detections as a GeoPackage.
+
+The resulting GeoPackage can be directly visualized in GIS software such as QGIS, making it possible to inspect detections on complete orthophoto tiles while preserving their geographic coordinates.
+
+![alt text](docs/screens/predictions_on_orthophotos.png)
+
+---
+
+# Large-scale inference
+
+The first end-to-end experiments have been performed on complete orthophoto tiles from the Gironde department, which was not used during the initial training.
+
+The detector successfully identifies most rugby fields while keeping the number of false positives relatively low.
+
+Visual inspection also revealed several limitations of the current model:
+
+* some poorly contrasted rugby fields are still missed;
+* a few football fields are incorrectly detected as rugby fields;
+* some bounding boxes require more accurate localization.
+
+These observations suggest that the overall pipeline is operational, while highlighting the need for a more diverse training dataset before large-scale deployment.
+
+---
+
+# Repository structure
 
 ```text
 rugby-fields/
@@ -184,34 +207,37 @@ rugby-fields/
 ├── experiments/
 ├── models/
 ├── src/
+│   ├── data-preprocessing/
+│   ├── yolo_model/
+│   └── inference/
 └── README.md
 ```
 
-The dataset, training configuration and trained models are versioned
-independently to ensure experiments remain reproducible.
+Datasets, model weights and experiments are versioned independently to ensure reproducibility.
 
-
------------------------------------------------------------------------
+---
 
 # Technical stack
 
-- Python
-- PyTorch
-- Ultralytics YOLO26
-- Rasterio
-- GeoPandas
-- PyProj
-- OpenStreetMap
-- IGN BD ORTHO
-- Label Studio
-- QGIS
-- Google Colab
+* Python
+* PyTorch
+* Ultralytics YOLO26
+* Rasterio
+* GeoPandas
+* PyProj
+* OpenStreetMap
+* IGN BD ORTHO
+* Label Studio
+* QGIS
+* Google Colab
 
-------------------------------------------------------------------------
+---
 
-# Next steps
+# Roadmap
 
--   Increase dataset diversity with more departments.
--   Improve discrimination between rugby and football fields.
--   Run inference on complete orthophoto tiles.
--   Build a nationwide detection pipeline.
+* Build a geographically more diverse training dataset.
+* Create a geographically independent benchmark for evaluation.
+* Retrain the detector on the updated dataset.
+* Improve discrimination between rugby and football fields.
+* Run inference at the scale of complete French departments.
+* Estimate the number and location of rugby fields across France.

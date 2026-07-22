@@ -1,9 +1,9 @@
 from ultralytics import YOLO
 
-model = YOLO("runs/detect/train-2/weights/best.pt")
+model = YOLO("models/yolo26n/v1_1024_100e/best.pt")
 
-model.predict(
-    source="data/yolo_dataset/v1/images/test",
-    conf=0.25,
+results = model.predict(
+    source="/home/alexandre-martin/Documents/rugby-fields/data/raw/D33/dalle_jpg/34.jpg",
+    conf=0.001,
     save=True,
 )
