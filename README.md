@@ -74,34 +74,37 @@ is manually verified before training.
 
 ------------------------------------------------------------------------
 
-# Dataset v1
+# Dataset
 
-The first version of the dataset was entirely built in-house.
+The dataset is built entirely in-house from IGN BD ORTHO imagery and OpenStreetMap geometries. It contains both positive examples of rugby fields and difficult negative examples such as football fields, athletics tracks and other visually similar areas.
 
-The objective was not only to collect rugby fields but also difficult negative examples to reduce false detections.
+All annotations are manually reviewed and corrected in Label Studio. The current version uses **oriented bounding boxes (OBB)** so that rotated fields can be localized more precisely than with standard axis-aligned bounding boxes.
 
-| Type             |  Images |
-| ---------------- | ------: |
-| Rugby fields     |     276 |
-| Negative samples |     509 |
-| **Total**        | **785** |
+## Dataset evolution
 
-Negative samples intentionally include football fields, athletics tracks
-and other visually similar areas to reduce false positives.
+The initial dataset was created from imagery covering Haute-Garonne. It was progressively expanded with additional geographic areas, including Hautes-Pyrénées, in order to increase visual diversity and reduce overfitting to a single department.
 
-Bounding boxes were manually corrected using Label Studio.
+The current training protocol uses a strict geographic split:
 
-Example of a crop annotated on Label Studio :
-![alt text](docs/screens/crop_annotated_example.png)
+| Split | Geographic area | Purpose |
+|---|---|---|
+| Training | Haute-Garonne and Hautes-Pyrénées | Model fitting |
+| Validation | Gironde | Evaluation on a geographically independent area |
+
+No crop from Gironde is used during training. This department-level separation prevents spatial leakage between the training and validation sets and provides a more realistic estimate of the model's ability to generalize to unseen imagery.
+
+Negative samples remain an important part of the dataset and intentionally include structures that can be confused with rugby fields, especially football pitches and athletics facilities.
 
 ------------------------------------------------------------------------
+
 
 # Model
 
 Current detector:
 
--   YOLO26n
+-   YOLO26n-OBB
 -   Single class (`rugby_field`)
+-   Oriented bounding boxes for rotated field localization
 
 Training performed on Google Colab.
 
@@ -109,57 +112,42 @@ Training performed on Google Colab.
 
 # Results
 
-These metrics were obtained on the current internal validation split. Because the dataset contains geographically and visually related crops, they should be considered preliminary and may overestimate performance on entirely unseen regions. A geographically separated test set is currently being developed.
+The current results were obtained with an **OBB detector** trained on Haute-Garonne and Hautes-Pyrénées and evaluated exclusively on Gironde.
 
-## Baseline
+Because the validation department is geographically independent from the training data, these metrics do not suffer from crop-level or location-level leakage. They therefore provide a substantially more rigorous estimate of generalization than the earlier random internal split.
 
-  Parameter    Value
-  ------------ ---------
-  Model        YOLO26n
-  Image size   640 px
-  Epochs       30
-  Batch size   4
+## Current OBB experiment
 
-Results:
+| Parameter | Value |
+|---|---:|
+| Model | YOLO26n-OBB |
+| Task | Single-class oriented object detection |
+| Training epochs | 100 |
+| Best epoch | 74 |
+| Training areas | Haute-Garonne, Hautes-Pyrénées |
+| Validation area | Gironde |
 
--   Precision ≈ 0.65
--   Recall ≈ 0.79
--   mAP50 ≈ 0.78
--   mAP50-95 ≈ 0.66
+Metrics at the best epoch, selected using validation mAP50-95:
 
-Training curves showed that the model was still improving after 30
-epochs.
+| Metric | Value |
+|---|---:|
+| Precision | 0.758 |
+| Recall | 0.814 |
+| mAP50 | 0.815 |
+| mAP50-95 | 0.759 |
 
-![alt text](docs/screens/results_v1_640_30e.png)
+The best validation performance was reached at epoch 74. The model achieved a strong balance between detection and localization quality on a department that was never seen during training.
 
-## Current best experiment
+The gap compared with the earlier internal validation metrics is expected: the current protocol is more difficult and more representative of real deployment, where the model must process imagery from new geographic areas with different ground appearance, lighting, field conditions and surrounding infrastructure.
 
-  Parameter    Value
-  ------------ ---------
-  Model        YOLO26n
-  Image size   1024 px
-  Epochs       100
-  Batch size   4
+Training and validation curves:
 
-Results:
+![OBB training results](docs/screens/results_v4_obb.png)
 
-Initial results are promising on the current validation set, but further evaluation on geographically independent imagery is required before drawing conclusions about generalization.
+These results confirm that the detector generalizes beyond its training departments, while leaving room for improvement on poorly contrasted fields and visually ambiguous football facilities.
 
-Example prediction on the facilities of the greatest club in the world (Stade Toulousain) :
-
-![alt text](docs/screens/pos_00001.jpg)
-
-| Metric    | Value |
-| --------- | ----: |
-| Precision |  0.90 |
-| Recall    |  0.92 |
-| mAP50     | 0.967 |
-| mAP50-95  |  0.86 |
-
-The remaining failures mostly correspond to poorly contrasted fields with barely visible markings.
-
-![alt text](docs/screens/pos_00002.jpg)
 ------------------------------------------------------------------------
+
 
 # Inference pipeline
 
@@ -236,8 +224,5 @@ Datasets, model weights and experiments are versioned independently to ensure re
 # Roadmap
 
 * Build a geographically more diverse training dataset.
-* Create a geographically independent benchmark for evaluation.
-* Retrain the detector on the updated dataset.
-* Improve discrimination between rugby and football fields.
 * Run inference at the scale of complete French departments.
 * Estimate the number and location of rugby fields across France.
