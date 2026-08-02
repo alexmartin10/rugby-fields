@@ -3,6 +3,7 @@ import geopandas
 import random
 from shapely.geometry import box
 import numpy as np
+import re
 
 from PIL import Image
 from pathlib import Path
@@ -29,48 +30,25 @@ def round_to_higher_multiple_of_5(n: int) -> int:
     
     return n
 
+def get_departement_and_year(path_raw_data: Path):
+    """all files follow the same naming convention as given by IGN. We can use the first file
+    to guess the departement and year
+    
+    Returns departement, year"""
+    file = next(path_raw_data.rglob("*.jp2"))
+    pattern = r"^(\d+)-(\d+)-*"
+    m = re.search(pattern, file.name)
+    return int(m.group(1)), int(m.group(2))
+
 def make_file_name(departement: int, year, x_bound, y_bound):
     return f"{departement}-{year}-0{x_bound}-{y_bound}-LA93-0M20-E080.jp2"
 
-def calculate_yolo_coordinates(
-    x_field_center: int,
-    y_field_center: int,
-    xmin_img: int,
-    xmax_img: int,
-    ymin_img:int,
-    ymax_img: int,
-    xmin: int,
-    xmax: int,
-    ymin: int,
-    ymax: int
-):
-    """
-    x_field_center, y_field_center are the coordinates of the center of the field. Given by OSM.
-    xmin_img, ymax_img are the coordinates of the point at the extreme North-West of the image,
-    to put it simplier, the pixel (0, 0) of the image (top left).
-    xmax_img, ymin_img, same but for the bottom right pixel, position (img_size, img_size)
-    xmin, xmax, ymin, ymax are the bounds given by OSM.
-    """
-    #make sure bounds for the fields are inside the crop
-    xmin = max(xmin, xmin_img)
-    xmax = min(xmax, xmax_img)
-    ymin = max(ymin, ymin_img)
-    ymax = min(ymax, ymax_img)
 
-    x_center = abs((x_field_center - xmin_img) / (xmax_img - xmin_img))
-    y_center = abs((y_field_center - ymin_img) / (ymax_img - ymin_img))
-    height = abs((ymax - ymin) / (ymax_img - ymin_img))
-    width = abs((xmax - xmin) / (xmax_img - xmin_img))
-
-    return x_center, y_center, height, width
-
-
-def generate_yolo_format_crop_from_window(
+def make_crop_from_window(
         src: DatasetReader,
         window: Window,
         path_yolo_dataset: Path,
-        crop_index: int,
-        gdf: GeoDataFrame
+        crop_index: int
 ) -> Polygon:
 
     cropped_image = src.read((1, 2, 3), window=window) # shape: (bands, h, w)
@@ -85,38 +63,8 @@ def generate_yolo_format_crop_from_window(
 
     crop_geom = box(xmin_img, ymin_img, xmax_img, ymax_img)
 
-    gdf_all_fields_on_crop = gdf[gdf.intersects(crop_geom)]
-
-    with open(
-        path_yolo_dataset.joinpath(f"labels/img_{crop_index}.txt"),
-        "w"
-    ) as f:
-        for _, field in gdf_all_fields_on_crop.iterrows():
-            visible = field.geometry.intersection(crop_geom)
-
-            ratio_visible = visible.area / field.geometry.area
-
-            #only annotate a field if we can see >40% of his surface
-            if ratio_visible >= 0.4:
-                xmin, ymin, xmax, ymax = visible.bounds
-                xc = visible.centroid.x
-                yc = visible.centroid.y
-                x_center, y_center, height, widht = calculate_yolo_coordinates(
-                    xc,
-                    yc,
-                    xmin_img,
-                    xmax_img,
-                    ymin_img,
-                    ymax_img,
-                    xmin,
-                    xmax,
-                    ymin,
-                    ymax
-                )
-                f.write(f"0 {x_center:.6f} {y_center:.6f} {widht:.6f} {height:.6f}\n")
-        
-    f.close()
-
+    #returned geometry is then used to check against in the process of building
+    #negative data
     return crop_geom
 
 def clamp_window(col: int, row: int, size: int, src: DatasetReader):
@@ -137,12 +85,11 @@ def crop_images(
         path_yolo_dataset: Path,
         index: int,
         crops_made_from_img,
-        gdf,
         departement,
         year_orthophtos,
         img_size=2048,
     ):
-    #multiply index by number of crops made with one image, here 4 (centered, zoomed, shifted x2), to
+    #multiply index by number of crops made with one image, here 3 (centered, zoomed, shifted ), to
     #be at the right index
     index = index * crops_made_from_img
 
@@ -170,12 +117,11 @@ def crop_images(
         ## centered
         window_centered = clamp_window(col, row, img_size, src)
 
-        crop_geom_centered = generate_yolo_format_crop_from_window(
+        crop_geom_centered = make_crop_from_window(
             src,
             window_centered,
             path_yolo_dataset,
-            index,
-            gdf
+            index
         )
 
         index += 1
@@ -183,12 +129,11 @@ def crop_images(
         ## zoomed in
         window_centered_zoomed = clamp_window(col, row, img_size_zoomed, src)
         
-        crop_geom_zoomed = generate_yolo_format_crop_from_window(
+        crop_geom_zoomed = make_crop_from_window(
             src,
             window_centered_zoomed,
             path_yolo_dataset,
-            index,
-            gdf
+            index
         )
 
         index += 1
@@ -196,12 +141,11 @@ def crop_images(
         ##shifted randomly
         window_shifted = clamp_window(col - dx, row - dy, img_size, src)
 
-        crop_geom_shifted = generate_yolo_format_crop_from_window(
+        crop_geom_shifted = make_crop_from_window(
             src,
             window_shifted,
             path_yolo_dataset,
-            index,
-            gdf
+            index
         )
 
     src.close()
@@ -212,18 +156,21 @@ def crop_images(
 def extract_all_crops_from_gdf(
         gdf: GeoDataFrame,
         path_raw_data: Path,
-        path_yolo_dataset: Path,
+        path_save: Path,
         path_save_crop_geometries: Path,
-        departement: int,
-        year_orthophotos: int,
-        index_start=0
+        index_start=0,
+        crops_made_from_img=3
     ):
     """
     path_save_crop_geometries is the path to which we save the gdf containing the geometry of all the
     images we cropped. We then use it to create the negative dataset (containing no rugby fields).
 
     """
+    departement, year_orthophotos = get_departement_and_year(path_raw_data)
     all_geoms = []
+
+    images_dir = path_save / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
 
     if gdf.crs.name != "RGF93 v2b / Lambert-93":
         gdf = gdf.to_crs('EPSG:9794')
@@ -238,10 +185,9 @@ def extract_all_crops_from_gdf(
         geom_list = crop_images(
             geom,
             path_raw_data,
-            path_yolo_dataset,
+            path_save,
             index=i + index_start,
-            crops_made_from_img=3,
-            gdf=gdf,
+            crops_made_from_img=crops_made_from_img,
             departement=departement,
             year_orthophtos=year_orthophotos
         )
@@ -254,44 +200,15 @@ def extract_all_crops_from_gdf(
     gdf_boxes = GeoDataFrame(geometry=all_geoms, crs='EPSG:9794')
     gdf_boxes.to_file(path_save_crop_geometries, driver="GeoJSON")
 
-def extract_crops_from_one(
-        gdf: GeoDataFrame,
-        path_raw_data: Path,
-        path_yolo_dataset: Path,
-        index_in_gdf: int
-    ):
-    """
-    path_to_dir is the path to the directory where crops are stored. Starts from the project base
-    directory. 
-    """
-    if gdf.crs.name != "RGF93 v2b / Lambert-93":
-        gdf = gdf.to_crs('EPSG:9794')
-        print("Coordinates system changed to Lambert 93.")
-
-    field = gdf.iloc[index_in_gdf]
-    geom = field.geometry
-
-    crop_images(
-        geom,
-        path_raw_data,
-        path_yolo_dataset,
-        index=0,
-        crops_made_from_img=3,
-        gdf=gdf,
-        departement=31,
-        year_orthophtos=2025
-    )
-
 def main():
     base = Path().resolve()
-    path_raw_data = base / "data/raw/D33/data_ign/BDORTHO_2-0_RVB-0M20_JP2-E080_LAMB93_D033_2024-01-01/ORTHOHR/1_DONNEES_LIVRAISON_2024-10-00207/OHR_RVB_0M20_JP2-E080_LAMB93_D33-2024"
-    path_yolo_dataset = base / "data/raw/D33/yolo_positives"
-    path_save_crop_geom = base / "data/raw/D33/geom_rugby_fields/crops_geom.json"
-    gdf = geopandas.read_file(base / "data/raw/D33/osm/export_rugby.geojson")
-    gdf = gdf[["sport", "geometry"]][:35]
+    path_raw_data = base / "data/raw/D65/data_ign/BDORTHO_2-0_RVB-0M20_JP2-E080_LAMB93_D065_2025-01-01/ORTHOHR/1_DONNEES_LIVRAISON_2026-02-00070/OHR_RVB_0M20_JP2-E080_LAMB93_D65-2025"
+    path_save = base / "data/raw/D65/yolo_positives"
+    path_save_crop_geom = base / "data/raw/D65/geom_rugby_fields/crops_geom.json"
+    gdf = geopandas.read_file(base / "data/raw/D65/osm/export_rugby.geojson")
+    gdf = gdf[["sport", "geometry"]]
 
-    extract_all_crops_from_gdf(gdf, path_raw_data, path_yolo_dataset, path_save_crop_geom, 33, 2024)
-    # extract_crops_from_one(gdf, path_raw_data, p, 11)
+    extract_all_crops_from_gdf(gdf, path_raw_data, path_save, path_save_crop_geom)
 
 
 if __name__ == "__main__":
