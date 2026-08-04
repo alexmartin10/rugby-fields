@@ -59,7 +59,7 @@ def make_crop_from_window(
 
     transform = src.window_transform(window)
     xmin_img, ymax_img = transform * (0, 0)
-    xmax_img, ymin_img = transform * (window.height, window.width)
+    xmax_img, ymin_img = transform * (window.width, window.height)
 
     crop_geom = box(xmin_img, ymin_img, xmax_img, ymax_img)
 
@@ -147,8 +147,6 @@ def crop_images(
             path_yolo_dataset,
             index
         )
-
-    src.close()
 
     return [crop_geom_centered, crop_geom_zoomed, crop_geom_shifted]
 

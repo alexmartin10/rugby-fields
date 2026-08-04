@@ -142,8 +142,6 @@ def crop_images(
 
         index += 1
 
-    src.close()
-
 def crop_random_image(
         path_raw_data: Path,
         n_images_to_crop: int,
