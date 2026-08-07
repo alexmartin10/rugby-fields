@@ -4,162 +4,49 @@ other type of fields (football, tracks ...) for the model to understand what rea
 For that we are going to use the data collected via OSM of sport fields that are not rugby and will also
 add images taken randomly in the whole departement if those images do not intersect with known rugby
 fields. We will only keep 2 points of view. There is no need for labeling here.
-
-Goal : 400 images with other sports fields, 100 random images.
 """
 
+import random
 import rasterio
 import geopandas
-import random
-from shapely.geometry import box
-import numpy as np
-import re
 
-from PIL import Image
 from pathlib import Path
-from rasterio.windows import Window
-from rasterio.io import DatasetReader
+from shapely.geometry import box
 from geopandas import GeoDataFrame
+from rasterio.io import DatasetReader
+from rasterio.windows import Window, bounds
 
-SEED = 42
+from raster_utils import save_crop_image, change_gdf_crs, find_raster_file_for_geometry, clamp_window
+from raster_utils import get_raster_crs
 
-def round_to_lower_multiple_of_5(n: int) -> int:
-    if not isinstance(n, int) or n < 0:
-        raise ValueError("n must be a positive integer")
-    
-    while n % 5 != 0:
-        n -= 1
-    
-    return n
-
-def round_to_higher_multiple_of_5(n: int) -> int:
-    if not isinstance(n, int) or n < 0:
-        raise ValueError("n must be a positive integer")
-    
-    while n % 5 != 0:
-        n += 1
-    
-    return n
-
-def get_departement_and_year(path_raw_data: Path):
-    """all files follow the same naming convention as given by IGN. We can use the first file
-    to guess the departement and year
-    
-    Returns departement, year"""
-    file = next(path_raw_data.rglob("*.jp2"))
-    pattern = r"^(\d+)-(\d+)-*"
-    m = re.search(pattern, file.name)
-    return int(m.group(1)), int(m.group(2))
-
-def make_file_name(departement: int, year, x_bound, y_bound):
-    return f"{departement}-{year}-0{x_bound}-{y_bound}-LA93-0M20-E080.jp2"
-
-
-def generate_yolo_format_crop_from_window(
-        src: DatasetReader,
-        window: Window,
-        output_dir: Path,
-        crop_index: int,
+def window_to_geometry(
+    window: Window,
+    src: DatasetReader,
 ):
-
-    cropped_image = src.read((1, 2, 3), window=window) # shape: (bands, h, w)
-
-    img = np.transpose(cropped_image, (1, 2, 0))  # -> (h, w, bands)
-
-    Image.fromarray(img).save(output_dir / f"img_{crop_index}.jpg")
-
-
-def clamp_window(col: int, row: int, size: int, src: DatasetReader):
-    col_off = col - size // 2
-    row_off = row - size // 2
-
-    col_off = max(0, col_off)
-    row_off = max(0, row_off)
-
-    col_off = min(col_off, src.width - size)
-    row_off = min(row_off, src.height - size)
-
-    return Window(col_off, row_off, size, size)
-
-def crop_images(
-        geometry,
-        path_raw_data: Path,
-        output_dir: Path,
-        index: int,
-        crops_made_from_img,
-        departement,
-        year_orthophtos,
-        img_size=2048,
-    ):
-    #multiply index by number of crops made with one image, here 2 (centered, zoomed), to
-    #be at the right index
-    index = index * crops_made_from_img
-
-    img_size_zoomed = int(0.5 * img_size)
-
-    point = geometry.representative_point()
-    x, y = point.x, point.y
-
-    x_km = int(x / 1000)
-    y_km = int(y / 1000) + 1
-
-    x_km = round_to_lower_multiple_of_5(x_km)
-    y_km = round_to_higher_multiple_of_5(y_km)
-
-    file_name = make_file_name(departement, year_orthophtos, x_km, y_km)
-    
-    raster_path = path_raw_data / file_name
-
-    if not raster_path.exists():
-        raise FileNotFoundError(
-            f"No orthophoto found for geometry centroid: {raster_path}"
+    return box(
+        *bounds(
+            window,
+            src.transform,
         )
-
-    with rasterio.open(path_raw_data.joinpath(file_name)) as src:
-        row, col = src.index(x, y)
-        
-        ## centered
-        window_centered = clamp_window(col, row, img_size, src)
-
-        generate_yolo_format_crop_from_window(
-            src,
-            window_centered,
-            output_dir,
-            index
-        )
-
-        index += 1
-
-        ## zoomed in
-        window_centered_zoomed = clamp_window(col, row, img_size_zoomed, src)
-        
-        generate_yolo_format_crop_from_window(
-            src,
-            window_centered_zoomed,
-            output_dir,
-            index
-        )
-
-        index += 1
+    )
 
 def crop_random_image(
-        path_raw_data: Path,
-        n_images_to_crop: int,
-        gdf_boxes_rugby: GeoDataFrame,
+        path_ign_data: Path,
+        n_random_crops: int,
+        gdf_rugby_fields: GeoDataFrame,
         output_dir: Path,
         index: int,
+        rng: random.Random,
         img_size: int = 2048
 ):
-    rng = random.Random(SEED)
-
-    orthophotos = list(path_raw_data.rglob("*.jp2"))
+    orthophotos = list(path_ign_data.rglob("*.jp2"))
 
     crops = 0
 
-    max_attempts = n_images_to_crop * 100
+    max_attempts = n_random_crops * 100
     attempts = 0
 
-    while crops < n_images_to_crop and attempts < max_attempts:
+    while crops < n_random_crops and attempts < max_attempts:
         attempts += 1
         
         path_image = rng.choice(orthophotos)
@@ -170,15 +57,10 @@ def crop_random_image(
 
             window = clamp_window(col, row, img_size, src)
 
-            transform = src.window_transform(window)
+            crop_geom = window_to_geometry(window, src)
 
-            xmin_img, ymax_img = transform * (0, 0)
-            xmax_img, ymin_img = transform * (window.width, window.height)
-
-            crop_geom = box(xmin_img, ymin_img, xmax_img, ymax_img)
-
-            if not gdf_boxes_rugby.intersects(crop_geom).any():
-                generate_yolo_format_crop_from_window(
+            if not gdf_rugby_fields.intersects(crop_geom).any():
+                save_crop_image(
                     src,
                     window,
                     output_dir,
@@ -188,114 +70,159 @@ def crop_random_image(
                 index += 1
                 crops += 1
 
-    if crops < n_images_to_crop:
+    if crops < n_random_crops:
         raise RuntimeError(
-            f"Only {crops}/{n_images_to_crop} valid random crops found "
+            f"Only {crops}/{n_random_crops} valid random crops found "
             f"after {attempts} attempts."
         )
 
-def extract_all_crops_from_gdf(
+
+def extract_negative_fields(
         gdf: GeoDataFrame,
-        path_raw_data: Path,
+        path_ign_data: Path,
         output_dir: Path,
         gdf_rugby: GeoDataFrame,
-        n_negative_fields,
-        crops_made_from_img,
-        index_start=0
-    ):
-    """
-    path_to_dir is the path to the directory where crops are stored. Starts from the project base
-    directory. 
-    """
-    departement, year = get_departement_and_year(path_raw_data)
-
-    TARGET_CRS = "EPSG:9794"
-
-    if gdf.crs is None:
-        raise ValueError("The input GeoDataFrame has no CRS.")
-
-    gdf = gdf.to_crs(TARGET_CRS)
-
-    gdf = gdf.sample(frac=1, random_state=SEED).reset_index(drop=True)
+        n_negative_fields: int,
+        seed: int,
+        index_start=0,
+        img_size=2048
+):
+    gdf = gdf.sample(frac=1, random_state=seed).reset_index(drop=True)
 
     n_fields = gdf.shape[0]
 
     fields_extracted = 0
-    i = 0
+    candidate_index = 0
+    crop_index = index_start
 
     #condition to stop: no field left in gdf or enough fields extracted
-    while i < n_fields and fields_extracted < n_negative_fields:
-        field = gdf.iloc[i]
+    while candidate_index < n_fields and fields_extracted < n_negative_fields:
+        field = gdf.iloc[candidate_index]
         geom = field.geometry
 
-        if not gdf_rugby.intersects(geom).any():
-
-            crop_images(
-                geom,
-                path_raw_data,
-                output_dir,
-                index=fields_extracted + index_start,
-                crops_made_from_img=crops_made_from_img,
-                departement=departement,
-                year_orthophtos=year
-            )
-            fields_extracted += 1
-
-            if fields_extracted % 10 == 0:
-                print(f"{fields_extracted} extracted")
-                print(f"{i - fields_extracted} fields passed")
+        point = geom.representative_point()
+        x, y = point.x, point.y    
         
-        i += 1
+        raster_path = find_raster_file_for_geometry(geom, path_ign_data)
 
-    return fields_extracted + index_start
+        if not raster_path.exists():
+            raise FileNotFoundError(
+                f"No orthophoto found for geometry centroid: {raster_path}"
+            )
+        
+        with rasterio.open(raster_path) as src:
+
+            row, col = src.index(x, y)
+
+            candidate_window = clamp_window(col, row, img_size, src)
+
+            candidate_crop_geometry = window_to_geometry(candidate_window, src)
+
+            if gdf_rugby.intersects(candidate_crop_geometry).any():
+                candidate_index += 1
+                continue
+                
+            ## centered
+            save_crop_image(
+                    src,
+                    candidate_window,
+                    output_dir,
+                    crop_index
+            )
+            crop_index += 1
+
+            ## zoomed in
+            window_zoomed = clamp_window(col, row, int(0.5 * img_size), src)
+
+            save_crop_image(
+                    src,
+                    window_zoomed,
+                    output_dir,
+                    crop_index
+                )
+            crop_index += 1
+
+        fields_extracted += 1
+        candidate_index += 1
+
+        if fields_extracted % 10 == 0:
+            print(f"{fields_extracted} extracted")
+            print(f"{candidate_index - fields_extracted} fields passed")
+    
+
+    return crop_index
 
 def make_negative_data(
         gdf_rugby_free: GeoDataFrame,
-        gdf_positive_crops_boxes: GeoDataFrame,
-        path_raw_data: Path,
+        gdf_rugby_fields: GeoDataFrame,
+        path_ign_data: Path,
         output_dir: Path,
-        overwrite_output_dir: bool = False,
-        crops_made_from_img: int = 2,
-        n_negative_fields: int = 100
+        n_negative_fields: int = 100,
+        n_random_crops: int = 50,
+        seed: int = 42
 ):
-    output_dir.mkdir(parents=True, exist_ok=True)
+    target_crs = get_raster_crs(path_ign_data)
 
-    if any(output_dir.glob()) and not overwrite_output_dir:
-        raise ValueError("The output directory already contains files. If you want to overwrite it, " \
-        "pass the overwrite_output_dir to True.")
-    
-    next_index = extract_all_crops_from_gdf(
+    gdf_rugby_free = change_gdf_crs(
         gdf_rugby_free,
-        path_raw_data,
+        target_crs
+    )
+
+    gdf_rugby_fields = change_gdf_crs(
+        gdf_rugby_fields,
+        target_crs
+    )
+
+    rng = random.Random(seed)
+
+    output_dir.mkdir(parents=True)
+    
+    next_index = extract_negative_fields(
+        gdf_rugby_free,
+        path_ign_data,
         output_dir,
-        gdf_positive_crops_boxes,
-        crops_made_from_img=crops_made_from_img,
-        n_negative_fields=n_negative_fields
+        gdf_rugby_fields,
+        n_negative_fields,
+        seed
     )
 
     crop_random_image(
-    path_raw_data=path_raw_data,
-    n_images_to_crop=50,
-    gdf_boxes_rugby=gdf_positive_crops_boxes,
-    output_dir=output_dir,
-    index=next_index
+        path_ign_data=path_ign_data,
+        n_random_crops=n_random_crops,
+        gdf_rugby_fields=gdf_rugby_fields,
+        output_dir=output_dir,
+        index=next_index,
+        rng=rng
     )
 
 def main():
     base = Path().resolve()
-    path_raw_data = base / "data/raw/D65/data_ign/BDORTHO_2-0_RVB-0M20_JP2-E080_LAMB93_D065_2025-01-01/ORTHOHR/1_DONNEES_LIVRAISON_2026-02-00070/OHR_RVB_0M20_JP2-E080_LAMB93_D65-2025"
-    output_dir = base / "data/raw/D65/images_negatives"
+    path_ign_data = base / "data/raw/D65/data_ign/BDORTHO_2-0_RVB-0M20_JP2-E080_LAMB93_D065_2025-01-01/ORTHOHR/1_DONNEES_LIVRAISON_2026-02-00070/OHR_RVB_0M20_JP2-E080_LAMB93_D65-2025"
+    output_dir = base / "data/raw/D65/images_negatives_test"
 
-    gdf_positive_crops_boxes = geopandas.read_file(base / "data/raw/D65/geom_rugby_fields/crops_geom.json")
+    gdf_rugby_fields = geopandas.read_file(base / "data/raw/D65/osm/export_rugby.geojson")
 
     gdf = geopandas.read_file(base / "data/raw/D65/osm/export_all_fields.geojson")
     gdf = gdf[["sport", "geometry"]]
-    gdf_rugby_free = gdf[gdf["sport"].str.contains("football|soccer|athletics", na=False)]
+
+    is_other_sport = gdf["sport"].str.contains(
+        "football|soccer|athletics",
+        case=False,
+        na=False
+    )
+
+    is_rugby = gdf["sport"].str.contains(
+        "rugby",
+        case=False,
+        na=False
+    )
+
+    gdf_rugby_free = gdf[is_other_sport & ~is_rugby]
 
     make_negative_data(
         gdf_rugby_free,
-        gdf_positive_crops_boxes,
-        path_raw_data,
+        gdf_rugby_fields,
+        path_ign_data,
         output_dir
     )
 

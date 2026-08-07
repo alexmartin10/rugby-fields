@@ -4,13 +4,11 @@ import geopandas as gpd
 import pandas as pd
 import re
 import numpy as np
-from shapely.geometry import box
+from shapely.geometry import box, Polygon
 
 from jp2_to_jpg import convert_jp2_tile_to_jpg
 
 np.set_printoptions(suppress=True, precision=10)
-
-model = YOLO("models/yolo26n/v1_1024_100e/best.pt")
 
 def predict_tile(path_tile: Path, path_save_jpg, model: YOLO, window_size):
     tile_id = path_tile.stem
@@ -37,7 +35,7 @@ def predict_tile(path_tile: Path, path_save_jpg, model: YOLO, window_size):
             #get the index of the image
             match = re.search(r"/(\d+)\.jpg$", r.path)
             index = int(match.group(1))
-            indexes += [index] * len(r.boxes)
+            indexes.extend([index] * len(r.boxes))
 
             #get bound pixels for the cropped image
             #Attention : row corresponds to y coordinate, col to x
@@ -62,9 +60,102 @@ def predict_tile(path_tile: Path, path_save_jpg, model: YOLO, window_size):
 
     return gpd.GeoDataFrame(df, geometry="geometry", crs=crs)
 
+def predict_tile_obb(
+    path_tile: Path,
+    path_save_jpg,
+    model: YOLO,
+    window_size: int,
+):
+    tile_id = path_tile.stem
+    path_save_jpg = Path(path_save_jpg)
+    path_save_jpg.mkdir(parents=True, exist_ok=True)
+
+    for jpg_path in path_save_jpg.glob("*.jpg"):
+        jpg_path.unlink()
+
+    transform, crs, dict_index_pixels = convert_jp2_tile_to_jpg(
+        path_tile,
+        path_save_jpg,
+        window_size,
+    )
+
+    results = model.predict(
+        source=path_save_jpg,
+        conf=0.25,
+        save=False,
+    )
+
+    fields_pixels = np.empty((0, 4, 2), dtype=float)
+    confidence = np.empty(0, dtype=float)
+    indexes = []
+
+    for result in results:
+        if result.obb is None or result.obb.data.numel() == 0:
+            continue
+
+        match = re.search(r"/(\d+)\.jpg$", result.path)
+
+        if match is None:
+            raise ValueError(
+                f"Impossible de récupérer l'index du crop depuis : {result.path}"
+            )
+
+        index = int(match.group(1))
+        indexes.extend([index] * len(result.obb))
+
+        row_start, col_start = dict_index_pixels[index]
+
+        # Shape : (nombre de boxes, 4 sommets, 2 coordonnées)
+        pixels_tile = result.obb.xyxyxyxy.numpy().copy()
+
+        # Décalage de tous les sommets vers le référentiel de la dalle
+        pixels_tile[:, :, 0] += col_start
+        pixels_tile[:, :, 1] += row_start
+
+        fields_pixels = np.concatenate(
+            [fields_pixels, pixels_tile],
+            axis=0,
+        )
+
+        confidence = np.concatenate(
+            [confidence, result.obb.conf.numpy()],
+        )
+
+    geometries = []
+
+    for field in fields_pixels:
+        coordinates_l93 = [
+            transform * (float(x), float(y))
+            for x, y in field
+        ]
+
+        polygon = Polygon(coordinates_l93)
+
+        geometries.append(polygon)
+
+    crop_ids = [
+        f"{tile_id}_{index}"
+        for index in indexes
+    ]
+
+    df = pd.DataFrame(
+        {
+            "confidence": confidence,
+            "geometry": geometries,
+            "crop_id": crop_ids,
+            "tile": str(path_tile),
+        }
+    )
+
+    return gpd.GeoDataFrame(
+        df,
+        geometry="geometry",
+        crs=crs,
+    )
+
 def spatial_nms(
     gdf: gpd.GeoDataFrame,
-    overlap_threshold: float = 0.6,
+    overlap_threshold:float,
 ) -> gpd.GeoDataFrame:
     if gdf.empty:
         return gdf.copy()
@@ -133,14 +224,14 @@ def spatial_nms(
         .copy()
     )
 
-def predict_all_tiles(orthophotos_dir, tmp_dir, model, window_size):
+def predict_all_tiles(orthophotos_dir, tmp_dir, model, window_size, overlap_threshold):
     orthophotos_dir = Path(orthophotos_dir).resolve()
     all_tiles = orthophotos_dir.rglob("*.jp2")
 
     gdfs = []
 
     for tile in all_tiles:
-        gdf = predict_tile(tile, tmp_dir, model, window_size)
+        gdf = predict_tile_obb(tile, tmp_dir, model, window_size)
         gdfs.append(gdf)
 
     if not gdfs:
@@ -155,15 +246,16 @@ def predict_all_tiles(orthophotos_dir, tmp_dir, model, window_size):
         crs=gdfs[0].crs,
     )
 
-    return spatial_nms(all_predictions)
+    return spatial_nms(all_predictions, overlap_threshold)
 
 def main():
     base = Path().resolve()
+    model = YOLO("models/yolo26n-obb/v4_1024_100e/weights/best.pt")
     path_to_jp2 = base / "data/raw/D33/test_dalles"
     path_save_jpg = base / "data/raw/D33/dalle_jpg"
-    gdf = predict_all_tiles(path_to_jp2, path_save_jpg, model, window_size=2048)
+    gdf = predict_all_tiles(path_to_jp2, path_save_jpg, model, window_size=2048, overlap_threshold=0.01)
     gdf.to_file(
-    "predictions.gpkg",
+    "predictions_obb.gpkg",
     driver="GPKG",
     )
 
