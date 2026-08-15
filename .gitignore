@@ -28,3 +28,6 @@ wheels/
 
 #Geopackages
 *.gpkg
+
+#Test data
+/tests/*.jp2
