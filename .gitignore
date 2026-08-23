@@ -29,5 +29,6 @@ wheels/
 #Geopackages
 *.gpkg
 
-#Test data
+#pytest
 /tests/*.jp2
+/.pytest_cache

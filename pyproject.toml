@@ -22,7 +22,10 @@ dependencies = [
 package = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/data_preprocessing"]
+packages = [
+    "src/data_preprocessing",
+    "src/inference",
+]
 
 [build-system]
 requires = ["hatchling"]
