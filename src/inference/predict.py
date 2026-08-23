@@ -5,12 +5,18 @@ import pandas as pd
 import re
 import numpy as np
 from shapely.geometry import box, Polygon
+import time
 
-from jp2_to_jpg import convert_jp2_tile_to_jpg
+from .jp2_to_jpg import convert_jp2_tile_to_jpg
 
 np.set_printoptions(suppress=True, precision=10)
 
-def predict_tile(path_tile: Path, path_save_jpg, model: YOLO, window_size):
+def predict_tile(
+        path_tile: Path, 
+        path_save_jpg, 
+        model: YOLO, 
+        window_size
+    ):
     tile_id = path_tile.stem
     path_save_jpg = Path(path_save_jpg)
     path_save_jpg.mkdir(parents=True, exist_ok=True)
@@ -250,14 +256,20 @@ def predict_all_tiles(orthophotos_dir, tmp_dir, model, window_size, overlap_thre
 
 def main():
     base = Path().resolve()
+    print("Loading model ...")
     model = YOLO("models/yolo26n-obb/v4_1024_100e/weights/best.pt")
     path_to_jp2 = base / "data/raw/D33/test_dalles"
     path_save_jpg = base / "data/raw/D33/dalle_jpg"
     gdf = predict_all_tiles(path_to_jp2, path_save_jpg, model, window_size=2048, overlap_threshold=0.01)
     gdf.to_file(
-    "predictions_obb.gpkg",
+    "predictions_obb_time.gpkg",
     driver="GPKG",
     )
 
 if __name__ == "__main__":
+    start = time.perf_counter()
+
     main()
+
+    elapsed = time.perf_counter() - start
+    print(f"Temps total: {elapsed:.2f} s")
