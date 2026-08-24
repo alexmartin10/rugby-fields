@@ -59,8 +59,8 @@ def convert_jp2_tile_to_jpg(
 
 #developping features
 def compute_start_indices(
-        width: int,
         height: int,
+        width: int,
         window_size: int,
         target_overlap: float,
         verbose: bool
