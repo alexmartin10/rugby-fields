@@ -4,67 +4,12 @@ import geopandas as gpd
 import pandas as pd
 import re
 import numpy as np
-from shapely.geometry import box, Polygon
+from shapely.geometry import Polygon
 import time
 
-from .jp2_to_jpg import convert_jp2_tile_to_jpg
+from .jp2_to_jpg import jp2_tile_to_jpg
 
 np.set_printoptions(suppress=True, precision=10)
-
-def predict_tile(
-        path_tile: Path, 
-        path_save_jpg, 
-        model: YOLO, 
-        window_size
-    ):
-    tile_id = path_tile.stem
-    path_save_jpg = Path(path_save_jpg)
-    path_save_jpg.mkdir(parents=True, exist_ok=True)
-
-    for jpg_path in path_save_jpg.glob("*.jpg"):
-        jpg_path.unlink()
-        
-    transform, crs, dict_index_pixels = convert_jp2_tile_to_jpg(path_tile, path_save_jpg, window_size)
-
-    results = model.predict(
-        source=path_save_jpg,
-        conf=0.25,
-        save=False,
-    )
-
-    fields_pixels = np.empty((0, 4))
-    confidence = np.empty((0))
-    indexes = []
-    for r in results:
-        if r.boxes.data.numel() != 0:
-            #field detected in the image
-            #get the index of the image
-            match = re.search(r"/(\d+)\.jpg$", r.path)
-            index = int(match.group(1))
-            indexes.extend([index] * len(r.boxes))
-
-            #get bound pixels for the cropped image
-            #Attention : row corresponds to y coordinate, col to x
-            row_start, col_start = dict_index_pixels[index]
-            
-            pixels_tile = r.boxes.xyxy.numpy() #(x1, y1, x2, y2)
-            #add row_start and col_start to have pixels in the tile "referential"
-            pixels_tile[:, 0::2] += col_start
-            pixels_tile[:, 1::2] += row_start
-
-            fields_pixels = np.concatenate([fields_pixels, pixels_tile])
-            confidence = np.concatenate([confidence, r.boxes.conf.numpy()])
-    
-    geometries = []
-    coordinates_L93 = fields_pixels.copy()
-    for field in coordinates_L93:
-        field[0:2] = transform * field[0:2]
-        field[2:] = transform * field[2:]
-        geometries.append(box(*field))
-    crops_ids = [f"{tile_id}_{index}" for index in indexes]
-    df = pd.DataFrame({"confidence": confidence, "geometry": geometries, "crop_id": crops_ids, "tile": str(path_tile)})
-
-    return gpd.GeoDataFrame(df, geometry="geometry", crs=crs)
 
 def predict_tile_obb(
     path_tile: Path,
@@ -79,7 +24,7 @@ def predict_tile_obb(
     for jpg_path in path_save_jpg.glob("*.jpg"):
         jpg_path.unlink()
 
-    transform, crs, dict_index_pixels = convert_jp2_tile_to_jpg(
+    transform, crs, dict_index_pixels = jp2_tile_to_jpg(
         path_tile,
         path_save_jpg,
         window_size,
@@ -88,7 +33,10 @@ def predict_tile_obb(
     results = model.predict(
         source=path_save_jpg,
         conf=0.25,
+        stream=True,
+        batch=8,
         save=False,
+        verbose=False
     )
 
     fields_pixels = np.empty((0, 4, 2), dtype=float)
