@@ -14,6 +14,8 @@ wheels/
 
 #Docs
 /docs/docs
+/benchmark
+/experiments
 
 #Runs
 /runs
@@ -26,7 +28,8 @@ wheels/
 #Archive
 /archive
 
-#Geopackages
+#Outputs
+/outputs
 *.gpkg
 
 #pytest
