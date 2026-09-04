@@ -3,6 +3,9 @@ import numpy as np
 import rasterio
 from PIL import Image
 from rasterio.windows import Window
+import logging
+
+logger = logging.getLogger(__name__)
 
 def compute_start_indices(
         height: int,
@@ -66,8 +69,8 @@ def jp2_tile_to_jpg(
         path_to_jp2: Path,
         path_save: Path, 
         window_size: int, 
-        overlap: float = 0.2,
-        verbose: bool = False
+        overlap: float,
+        verbose: bool
     ):
     """
     Returns dict[index] = [row_start, col_start] for each cropped image.

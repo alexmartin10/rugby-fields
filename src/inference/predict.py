@@ -6,17 +6,27 @@ import re
 import numpy as np
 from shapely.geometry import Polygon
 import time
+from datetime import date
+import json
+import os
+import logging
 
 from .jp2_to_jpg import jp2_tile_to_jpg
 
 np.set_printoptions(suppress=True, precision=10)
+
+logger = logging.getLogger(__name__)
+
 
 def predict_tile_obb(
     path_tile: Path,
     path_save_jpg,
     model: YOLO,
     window_size: int,
-):
+    window_overlap: float,
+    predict_args: dict,
+    verbose: bool = False
+) -> tuple[gpd.GeoDataFrame, int]:
     tile_id = path_tile.stem
     path_save_jpg = Path(path_save_jpg)
     path_save_jpg.mkdir(parents=True, exist_ok=True)
@@ -25,18 +35,16 @@ def predict_tile_obb(
         jpg_path.unlink()
 
     transform, crs, dict_index_pixels = jp2_tile_to_jpg(
-        path_tile,
-        path_save_jpg,
-        window_size,
+        path_to_jp2=path_tile,
+        path_save=path_save_jpg,
+        window_size=window_size,
+        overlap=window_overlap,
+        verbose=verbose
     )
 
     results = model.predict(
         source=path_save_jpg,
-        conf=0.25,
-        stream=True,
-        batch=8,
-        save=False,
-        verbose=False
+        **predict_args
     )
 
     fields_pixels = np.empty((0, 4, 2), dtype=float)
@@ -105,7 +113,7 @@ def predict_tile_obb(
         df,
         geometry="geometry",
         crs=crs,
-    )
+    ), len(dict_index_pixels)
 
 def spatial_nms(
     gdf: gpd.GeoDataFrame,
@@ -178,46 +186,170 @@ def spatial_nms(
         .copy()
     )
 
-def predict_all_tiles(orthophotos_dir, tmp_dir, model, window_size, overlap_threshold):
-    orthophotos_dir = Path(orthophotos_dir).resolve()
-    all_tiles = orthophotos_dir.rglob("*.jp2")
+def increment_path(path: str | Path, sep:str = "_") -> Path:
+    path = Path(path)
+    if path.exists():
+        for n in range(2, 9999):
+            p = Path(f"{path}{sep}{n}")
+            if not p.exists():
+                break
+        path = p
 
-    gdfs = []
+    return path
+
+def create_run_directory(save_dir: str | Path = "outputs"):
+    #create output dir
+    today = date.today()
+    year, month, day = today.year, today.month, today.day
+    run_dir = Path(save_dir) / "prediction" / f"{year}-{month}-{day}"
+    run_dir = increment_path(run_dir)
+
+    run_dir.mkdir(parents=True)
+
+    #/logs
+    logs_dir = run_dir / "logs"
+    logs_dir.mkdir(exist_ok=True)
+
+    return run_dir
+
+def run_raw_predictions(
+        input_path: str | Path,
+        run_dir: str | Path,
+        model: YOLO,
+        window_size: int,
+        window_overlap: float,
+        path_save_jpg: str | Path,
+
+        predict_args: dict = {
+            "conf": 0.25,
+            "stream": True,
+            "batch": 8,
+            "save": False,
+            "verbose": False
+        },
+):
+    run_dir = Path(run_dir)
+    input_path = Path(input_path)
+
+    #save run metadata: model, conf, imgsz, overlap, source, date, ...
+    today = date.today()
+    metadata = dict()
+    metadata["model_path"] = model.model_name
+    metadata["window_size"] = window_size
+    metadata["window_overlap"] = window_overlap
+    metadata["input_path"] = str(input_path)
+    metadata["date"] = str(today)
+    metadata["predict_args"] = predict_args.copy()
+
+    metadata_path = run_dir / "metadata_prediction.json"
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f)
+
+    #save one raw prediction by tile, in geoparquet, in dir raw_predictions
+    all_tiles = sorted(input_path.rglob("*.jp2"))
+
+    logger.info(f"Found {len(all_tiles)} JP2 tiles")
+
+    raw_preds_dir = run_dir / "raw_predictions"
+    raw_preds_dir.mkdir(exist_ok=True)
 
     for tile in all_tiles:
-        gdf = predict_tile_obb(tile, tmp_dir, model, window_size)
-        gdfs.append(gdf)
+        logger.info(f"Processing tile {str(tile.stem)}")
+        start = time.perf_counter()
 
-    if not gdfs:
-        return gpd.GeoDataFrame(
-            columns=["confidence", "geometry", "crop_id", "tile"],
-            geometry="geometry",
+        tmp_path = raw_preds_dir / f"{tile.stem}.parquet.part"
+        gdf, n_crops = predict_tile_obb(
+            tile, 
+            path_save_jpg, 
+            model, 
+            window_size,
+            window_overlap,
+            predict_args
         )
+        elapsed = time.perf_counter() - start
+        logger.info(f"Tile completed : {n_crops} crops, {len(gdf)} raw predictions, {elapsed:.1f}s")
+
+        gdf.to_parquet(tmp_path)
+        os.rename(str(tmp_path), str(raw_preds_dir / f"{tile.stem}.parquet")) #renamed after writing is over
+        logger.info(f"Raw prediction saved : {str(raw_preds_dir / f"{tile.stem}.parquet")}")
+
+
+def save_results_after_nms(
+        run_dir: str | Path,
+        nms_threshold: float
+):
+    run_dir = Path(run_dir)
+    raw_predictions_dir = run_dir / "raw_predictions"
+    final_result_dir = run_dir / "final"
+    final_result_dir.mkdir(exist_ok=True)
+
+    #read parquet files and concatenate them in a gdf
+    l_gdf = []
+    for file in raw_predictions_dir.glob("*.parquet"): # only read completed files
+        l_gdf.append(gpd.read_parquet(file))
 
     all_predictions = gpd.GeoDataFrame(
-        pd.concat(gdfs, ignore_index=True),
+        pd.concat(l_gdf, ignore_index=True),
         geometry="geometry",
-        crs=gdfs[0].crs,
+        crs=l_gdf[0].crs,
     )
-
-    return spatial_nms(all_predictions, overlap_threshold)
-
-def main():
-    base = Path().resolve()
-    print("Loading model ...")
-    model = YOLO("models/yolo26n-obb/v4_1024_100e/weights/best.pt")
-    path_to_jp2 = base / "data/raw/D33/test_dalles"
-    path_save_jpg = base / "data/raw/D33/dalle_jpg"
-    gdf = predict_all_tiles(path_to_jp2, path_save_jpg, model, window_size=2048, overlap_threshold=0.01)
-    gdf.to_file(
-    "predictions_obb_time.gpkg",
-    driver="GPKG",
-    )
-
-if __name__ == "__main__":
+    logger.info(f"Starting global NMS on {len(all_predictions)} predictions")
     start = time.perf_counter()
 
-    main()
+    #final: final geopkg, after spatial_nms
+    gdf_after_nms = spatial_nms(all_predictions, nms_threshold)
 
     elapsed = time.perf_counter() - start
-    print(f"Temps total: {elapsed:.2f} s")
+    logger.info(f"NMS completed : {len(gdf_after_nms)} predictions kept, {elapsed:.1f}s")
+
+    gdf_after_nms.to_file(
+        str(final_result_dir / "predictions_obb.gpkg"),
+        driver="GPKG",        
+    )
+    logger.info(f"Final GeoPackage save : {str(final_result_dir / 'predictions_obb.gpkg')}")
+
+    #save nms metadata
+    today = date.today()
+    metadata = dict()
+    metadata["date"] = str(today)
+    metadata["nms_threshold"] = nms_threshold
+    metadata["gpkg"] = str(final_result_dir / "predictions_obb.gpkg")
+
+    metadata_path = run_dir / "metadata_nms.json"
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f)
+
+def main():
+    input_path = Path("data/raw/D33/test_dalles")
+    model = YOLO("models/yolo26n-obb/v4_1024_100e/weights/best.pt")
+
+    run_dir = create_run_directory("outputs")
+
+    logging.basicConfig(
+        filename=run_dir / "logs" / "predict.log",
+        level=logging.INFO,
+        format="%(asctime)s: %(name)s: %(levelname)s: %(message)s",
+        datefmt="%m/%d/%Y %H:%M:%S"
+    )
+    logger.info(f"Run started")
+
+    start = time.perf_counter()
+
+    run_raw_predictions(
+        input_path=input_path, 
+        run_dir=run_dir, 
+        model=model, 
+        window_size=2048, 
+        window_overlap=0.2, 
+        path_save_jpg="data/raw/D33/dalle_jpg"
+    )
+    elapsed = time.perf_counter() - start
+    logger.info(f"Processed all tiles in {elapsed:.1f}s")
+
+    save_results_after_nms(run_dir=run_dir, nms_threshold=0.1)
+
+    elapsed = time.perf_counter() - start
+    logger.info(f"Run completed in {elapsed:.1f}s")
+
+if __name__ == "__main__":
+    main()
