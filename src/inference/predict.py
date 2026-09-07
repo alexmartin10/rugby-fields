@@ -15,9 +15,17 @@ from .jp2_to_jpg import jp2_tile_to_jpg
 logger = logging.getLogger(__name__)
 
 def configure_logging(log_path: str | Path) -> None:
+    """
+    Configure application logging to both a file and the console.
+
+    The log file is opened in append mode so resumed executions continue
+    writing to the existing run log.
+
+    Args:
+        log_path: Path to the run log file.
+    """
     log_path = Path(log_path)
 
-    # Make parent directory if it doesn't exist
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
@@ -39,11 +47,31 @@ def predict_tile_obb(
     predict_args: dict,
     verbose: bool = False
 ) -> tuple[gpd.GeoDataFrame, int]:
+    """
+    Run OBB inference on every crop extracted from a JP2 tile.
+
+    Predicted pixel coordinates are shifted back into the tile coordinate
+    system and converted into georeferenced polygons.
+
+    Args:
+        path_tile: Path to the JP2 tile.
+        path_save_jpg: Directory used to store temporary JPEG crops.
+        model: Loaded Ultralytics YOLO model.
+        window_size: Crop width and height in pixels.
+        window_overlap: Target overlap ratio between adjacent crops.
+        predict_args: Additional arguments forwarded to ``model.predict``.
+        verbose: Whether to display crop-generation information.
+
+    Returns:
+        A tuple containing the raw georeferenced predictions and the number
+        of generated crops.
+    """
     path_tile = Path(path_tile)
     tile_id = path_tile.stem
     path_save_jpg = Path(path_save_jpg)
     path_save_jpg.mkdir(parents=True, exist_ok=True)
 
+    # The directory is reused between tiles, so previous crops must be removed.
     for jpg_path in path_save_jpg.glob("*.jpg"):
         jpg_path.unlink()
 
@@ -65,7 +93,7 @@ def predict_tile_obb(
     indexes = []
 
     for result in results:
-        if result.obb is None or result.obb.data.numel() == 0: # no prediction
+        if result.obb is None or result.obb.data.numel() == 0:
             continue
 
         index = int(Path(result.path).stem)
@@ -73,10 +101,10 @@ def predict_tile_obb(
 
         row_start, col_start = dict_index_pixels[index]
 
-        # Shape : (nombre de boxes, 4 sommets, 2 coordonnées)
+        # Shape: (number of boxes, four vertices, two coordinates).
         pixels_tile = result.obb.xyxyxyxy.numpy().copy()
 
-        # Décalage de tous les sommets vers le référentiel de la dalle
+        # Shift every vertex from crop coordinates to tile coordinates.
         pixels_tile[:, :, 0] += col_start
         pixels_tile[:, :, 1] += row_start
 
@@ -125,6 +153,24 @@ def spatial_nms(
     gdf: gpd.GeoDataFrame,
     overlap_threshold:float,
 ) -> gpd.GeoDataFrame:
+    """
+    Remove overlapping predictions produced from different image crops.
+
+    Predictions are processed from largest to smallest. A candidate is
+    suppressed when its intersection with a previously kept polygon, divided
+    by the candidate area, reaches ``overlap_threshold``. Predictions from the
+    same crop are not compared.
+
+    Args:
+        gdf: Raw georeferenced predictions.
+        overlap_threshold: Minimum overlap ratio required for suppression.
+
+    Returns:
+        A copy of the GeoDataFrame containing the retained predictions.
+
+    Raises:
+        ValueError: If the geometry or crop identifier column is missing.
+    """
     if gdf.empty:
         return gdf.copy()
 
@@ -193,6 +239,16 @@ def spatial_nms(
     )
 
 def increment_path(path: str | Path, sep:str = "_") -> Path:
+    """
+    Return an available path by appending an incrementing suffix if needed.
+
+    Args:
+        path: Desired path.
+        sep: Separator inserted before the numeric suffix.
+
+    Returns:
+        The original path if available, otherwise an incremented path.
+    """
     path = Path(path)
     if path.exists():
         for n in range(2, 9999):
@@ -204,7 +260,18 @@ def increment_path(path: str | Path, sep:str = "_") -> Path:
     return path
 
 def create_run_directory(save_dir: str | Path = "outputs") -> Path:
-    #create output dir
+    """
+    Create a uniquely named directory for a prediction run.
+
+    The directory name is based on the current date and contains a
+    subdirectory for logs.
+
+    Args:
+        save_dir: Root directory in which prediction runs are stored.
+
+    Returns:
+        Path to the newly created run directory.
+    """
     today = date.today()
     year, month, day = today.year, today.month, today.day
     run_dir = Path(save_dir) / "prediction" / f"{year}-{month}-{day}"
@@ -212,7 +279,6 @@ def create_run_directory(save_dir: str | Path = "outputs") -> Path:
 
     run_dir.mkdir(parents=True)
 
-    #/logs
     logs_dir = run_dir / "logs"
     logs_dir.mkdir(exist_ok=True)
 
@@ -229,8 +295,20 @@ def predict_and_save_tile(
         verbose: bool
     ) -> None:
     """
-    config expects the arguments to be given to predict_tile_obb :
-    path_save_jpg, window_size, window_overlap, predict_args, verbose
+    Predict one tile and atomically save its raw GeoParquet output.
+
+    Predictions are first written to a partial file. The final ``.parquet``
+    file only becomes visible after the write completes successfully.
+
+    Args:
+        tile: JP2 tile to process.
+        raw_preds_dir: Directory receiving raw prediction files.
+        path_save_jpg: Directory used for temporary JPEG crops.
+        model: Loaded Ultralytics YOLO model.
+        window_size: Crop width and height in pixels.
+        window_overlap: Target overlap ratio between adjacent crops.
+        predict_args: Additional arguments forwarded to ``model.predict``.
+        verbose: Whether to display crop-generation information.
     """
     logger.info("Processing tile %s", str(tile.stem))
         
@@ -250,7 +328,8 @@ def predict_and_save_tile(
     gdf.to_parquet(tmp_path)
 
     final_path = raw_preds_dir / f"{tile.stem}.parquet"
-    tmp_path.replace(final_path) #renamed after writing is over
+    # Expose the final file only after GeoParquet writing succeeds.
+    tmp_path.replace(final_path)
 
     elapsed = time.perf_counter() - start
 
@@ -273,7 +352,21 @@ def run_raw_predictions(
         verbose: bool = False,
     ) -> None:
     """
-    JP2 files expected to be read must all be directly in the input_path directory.
+    Generate and save raw predictions for every JP2 tile in a directory.
+
+    Only JP2 files located directly inside ``input_path`` are processed. The
+    prediction configuration is saved before processing starts.
+
+    Args:
+        input_path: Directory containing the JP2 tiles.
+        run_dir: Directory associated with the prediction run.
+        model: Loaded Ultralytics YOLO model.
+        window_size: Crop width and height in pixels.
+        window_overlap: Target overlap ratio between adjacent crops.
+        path_save_jpg: Directory used for temporary JPEG crops.
+        predict_args: Arguments forwarded to ``model.predict``. Default
+            arguments are used when this is ``None``.
+        verbose: Whether to display crop-generation information.
     """
     run_dir = Path(run_dir)
     input_path = Path(input_path)
@@ -287,7 +380,7 @@ def run_raw_predictions(
             "verbose": False
         }
 
-    #save run metadata: model, conf, imgsz, overlap, source, date, ...
+    # Persist the inference configuration required to resume the run.
     today = date.today()
     metadata = dict()
     metadata["model_path"] = str(Path(model.model_name).resolve())
@@ -303,7 +396,7 @@ def run_raw_predictions(
     with open(metadata_path, "w") as f:
         json.dump(metadata, f)
 
-    #save one raw prediction by tile, in geoparquet, in dir raw_predictions
+    # Only direct children are supported, keeping tile stems unique in the run.
     all_tiles = sorted(input_path.glob("*.jp2"))
 
     logger.info("Found %d JP2 tiles", len(all_tiles))
@@ -326,6 +419,23 @@ def run_raw_predictions(
 
 
 def resume_run(run_dir: str | Path) -> int | None:
+    """
+    Resume an interrupted prediction run from its saved metadata.
+
+    Completed tiles are identified by their finalized GeoParquet files.
+    Partial files are ignored, causing their tiles to be processed again.
+
+    Args:
+        run_dir: Directory of the interrupted prediction run.
+
+    Returns:
+        The number of tiles processed during the resumed execution, or
+        ``None`` when the run cannot be resumed because its metadata or model
+        is unavailable or invalid.
+
+    Raises:
+        ValueError: If the original input directory no longer exists.
+    """
     run_dir = Path(run_dir)
     raw_preds_dir = run_dir / "raw_predictions"
     metadata_path = run_dir / "metadata_prediction.json"
@@ -362,13 +472,14 @@ def resume_run(run_dir: str | Path) -> int | None:
         logger.error("Missing prediction metadata key: %s", error)
         return
 
-    if not input_path.is_dir():
+    if not input_path.exists():
         logger.warning(
             "Data source directory for the original run %s doesn't exists anymore",
             str(input_path)
         )
         raise ValueError
 
+    # Finalized Parquet files are the source of truth; partial files are ignored.
     completed_tiles = set([tile.stem for tile in raw_preds_dir.glob("*.parquet")])
     all_tiles = sorted(input_path.glob("*.jp2"))
     missing_tiles = [tile for tile in all_tiles if tile.stem not in completed_tiles]
@@ -399,18 +510,35 @@ def resume_run(run_dir: str | Path) -> int | None:
 def save_results_after_nms(
         run_dir: str | Path,
         nms_threshold: float
-) -> Path | None:
+    ) -> Path | None:
+    """
+    Apply global spatial NMS to completed raw prediction files.
+
+    This step reads only finalized GeoParquet files and does not invoke the
+    YOLO model.
+
+    Args:
+        run_dir: Directory containing the raw predictions.
+        nms_threshold: Overlap threshold passed to the spatial NMS.
+
+    Returns:
+        Path to the generated GeoPackage, or ``None`` when the completed tiles
+        contain no predictions.
+
+    Raises:
+        ValueError: If no completed raw prediction file exists.
+    """
     run_dir = Path(run_dir)
     raw_predictions_dir = run_dir / "raw_predictions"
     final_result_dir = run_dir / "final"
     final_result_dir.mkdir(exist_ok=True)
 
-    #read parquet files and concatenate them in a gdf
+    # Post-processing relies exclusively on completed per-tile outputs.
     l_gdf = []
-    for file in raw_predictions_dir.glob("*.parquet"): # only read completed files
+    for file in raw_predictions_dir.glob("*.parquet"):
         l_gdf.append(gpd.read_parquet(file))
 
-    if not l_gdf: # in the case no finished parquet file exists
+    if not l_gdf:
         raise ValueError("No completed raw prediction files found")
 
     all_predictions = gpd.GeoDataFrame(
@@ -426,7 +554,6 @@ def save_results_after_nms(
     logger.info("Starting global NMS on %d predictions", len(all_predictions))
     start = time.perf_counter()
 
-    #final: final geopkg, after spatial_nms
     gdf_after_nms = spatial_nms(all_predictions, nms_threshold)
 
     elapsed = time.perf_counter() - start
@@ -444,7 +571,6 @@ def save_results_after_nms(
     )
     logger.info("Final GeoPackage save : %s", str(results_filename))
 
-    #save nms metadata
     today = date.today()
     metadata = dict()
     metadata["date"] = str(today)
@@ -458,6 +584,7 @@ def save_results_after_nms(
     return results_filename
 
 def main():
+    """Run the complete prediction and post-processing pipeline."""
     try:
         input_path = Path("data/raw/D33/test_dalles")
         
@@ -494,6 +621,7 @@ def main():
         raise
 
 def resume_main():
+    """Resume raw prediction generation for an existing run."""
     try:
         run_dir = Path("outputs/prediction/2026-9-5")
         configure_logging(run_dir / "logs" / "predict.log")
