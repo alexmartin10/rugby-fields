@@ -1,6 +1,6 @@
 import numpy as np
 
-from inference.jp2_to_jpg import compute_start_indices
+from inference.jp2_crops import compute_start_indices
 
 
 row_starts_normal, col_starts_normal = compute_start_indices(25000, 25000, 2048, 0.2, False) #normal case in our project

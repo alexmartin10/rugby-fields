@@ -59,12 +59,11 @@ def test_predict_and_save_tile_writes_final_empty_parquet(
     predict_module.predict_and_save_tile(
         tile=tmp_path / "tile_a.jp2",
         raw_preds_dir=raw_predictions_dir,
-        path_save_jpg=tmp_path / "jpg",
         model=object(),
         window_size=2048,
         window_overlap=0.2,
         predict_args={},
-        verbose=False,
+        verbose=False
     )
 
     output_path = raw_predictions_dir / "tile_a.parquet"
@@ -102,8 +101,7 @@ def test_run_raw_predictions_processes_only_direct_jp2_files(
         run_dir=run_dir,
         model=model,
         window_size=2048,
-        window_overlap=0.2,
-        path_save_jpg=tmp_path / "jpg",
+        window_overlap=0.2
     )
 
     assert processed_tiles == ["direct"]
@@ -132,7 +130,6 @@ def test_resume_retries_partial_and_missing_tiles_only(
 
     metadata = {
         "input_path": str(input_dir),
-        "path_save_jpg": str(tmp_path / "jpg"),
         "window_size": 2048,
         "window_overlap": 0.2,
         "predict_args": {"conf": 0.25},
@@ -179,7 +176,6 @@ def test_resume_recreates_missing_raw_predictions_directory(
     run_dir.mkdir()
     metadata = {
         "input_path": str(input_dir),
-        "path_save_jpg": str(tmp_path / "jpg"),
         "window_size": 2048,
         "window_overlap": 0.2,
         "predict_args": {"conf": 0.25},
