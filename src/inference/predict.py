@@ -1,6 +1,7 @@
 import time
 import json
 import logging
+import rasterio
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -10,7 +11,7 @@ from datetime import date
 from ultralytics import YOLO
 from shapely.geometry import Polygon
 
-from .jp2_to_jpg import jp2_tile_to_jpg
+from .jp2_crops import yield_crop
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,6 @@ def configure_logging(log_path: str | Path) -> None:
 
 def predict_tile_obb(
     path_tile: str | Path,
-    path_save_jpg: str | Path,
     model: YOLO,
     window_size: int,
     window_overlap: float,
@@ -48,14 +48,14 @@ def predict_tile_obb(
     verbose: bool = False
 ) -> tuple[gpd.GeoDataFrame, int]:
     """
-    Run OBB inference on every crop extracted from a JP2 tile.
+    Run OBB inference on in-memory crops generated from a JP2 tile.
 
-    Predicted pixel coordinates are shifted back into the tile coordinate
-    system and converted into georeferenced polygons.
+    Each crop is read lazily from the opened tile and passed directly to YOLO as a
+    BGR NumPy array. Predicted pixel coordinates are shifted back into the tile
+    coordinate system and converted into georeferenced polygons.
 
     Args:
         path_tile: Path to the JP2 tile.
-        path_save_jpg: Directory used to store temporary JPEG crops.
         model: Loaded Ultralytics YOLO model.
         window_size: Crop width and height in pixels.
         window_overlap: Target overlap ratio between adjacent crops.
@@ -63,59 +63,50 @@ def predict_tile_obb(
         verbose: Whether to display crop-generation information.
 
     Returns:
-        A tuple containing the raw georeferenced predictions and the number
-        of generated crops.
+        A tuple containing the raw georeferenced predictions and the number of
+        generated crops.
     """
     path_tile = Path(path_tile)
     tile_id = path_tile.stem
-    path_save_jpg = Path(path_save_jpg)
-    path_save_jpg.mkdir(parents=True, exist_ok=True)
 
-    # The directory is reused between tiles, so previous crops must be removed.
-    for jpg_path in path_save_jpg.glob("*.jpg"):
-        jpg_path.unlink()
-
-    transform, crs, dict_index_pixels = jp2_tile_to_jpg(
-        path_to_jp2=path_tile,
-        path_save=path_save_jpg,
-        window_size=window_size,
-        overlap=window_overlap,
-        verbose=verbose
-    )
-
-    results = model.predict(
-        source=path_save_jpg,
-        **predict_args
-    )
-
-    fields_pixels = np.empty((0, 4, 2), dtype=float)
-    confidence = np.empty(0, dtype=float)
+    fields_pixels = []
+    confidences = []
     indexes = []
+    n_crops = 0
 
-    for result in results:
-        if result.obb is None or result.obb.data.numel() == 0:
-            continue
+    with rasterio.open(path_tile) as src:
+    
+        crs, transform = src.crs, src.transform
 
-        index = int(Path(result.path).stem)
-        indexes.extend([index] * len(result.obb))
+        for image, col_start, row_start, index in yield_crop(
+            src=src,
+            window_size=window_size,
+            overlap=window_overlap,
+            verbose=verbose
+        ):
+            n_crops += 1
 
-        row_start, col_start = dict_index_pixels[index]
+            results = model.predict(
+                source=image,
+                **predict_args
+            )
 
-        # Shape: (number of boxes, four vertices, two coordinates).
-        pixels_tile = result.obb.xyxyxyxy.numpy().copy()
+            for result in results:
+                if result.obb is None or result.obb.data.numel() == 0:
+                    continue
 
-        # Shift every vertex from crop coordinates to tile coordinates.
-        pixels_tile[:, :, 0] += col_start
-        pixels_tile[:, :, 1] += row_start
+                indexes.extend([index] * len(result.obb))
 
-        fields_pixels = np.concatenate(
-            [fields_pixels, pixels_tile],
-            axis=0,
-        )
+                # Shape: (number of boxes, four vertices, two coordinates).
+                pixels_tile = result.obb.xyxyxyxy.numpy().copy()
 
-        confidence = np.concatenate(
-            [confidence, result.obb.conf.numpy()],
-        )
+                # Shift every vertex from crop coordinates to tile coordinates.
+                pixels_tile[:, :, 0] += col_start
+                pixels_tile[:, :, 1] += row_start
+
+                fields_pixels.extend(pixels_tile)
+
+                confidences.extend(result.obb.conf.numpy())
 
     geometries = []
 
@@ -136,7 +127,7 @@ def predict_tile_obb(
 
     df = pd.DataFrame(
         {
-            "confidence": confidence,
+            "confidence": confidences,
             "geometry": geometries,
             "crop_id": crop_ids,
             "tile": str(path_tile),
@@ -147,7 +138,7 @@ def predict_tile_obb(
         df,
         geometry="geometry",
         crs=crs,
-    ), len(dict_index_pixels)
+    ), n_crops
 
 def spatial_nms(
     gdf: gpd.GeoDataFrame,
@@ -156,10 +147,11 @@ def spatial_nms(
     """
     Remove overlapping predictions produced from different image crops.
 
-    Predictions are processed from largest to smallest. A candidate is
-    suppressed when its intersection with a previously kept polygon, divided
-    by the candidate area, reaches ``overlap_threshold``. Predictions from the
-    same crop are not compared.
+    Predictions are processed from largest to smallest. A candidate is suppressed
+    when its intersection with a previously kept polygon covers at least
+    ``overlap_threshold`` of the candidate's own area. Predictions from the same
+    crop are not compared.
+
 
     Args:
         gdf: Raw georeferenced predictions.
@@ -287,7 +279,6 @@ def create_run_directory(save_dir: str | Path = "outputs") -> Path:
 def predict_and_save_tile(
         tile: Path,
         raw_preds_dir: Path,
-        path_save_jpg: str | Path,
         model: YOLO,
         window_size: int,
         window_overlap: float,
@@ -303,7 +294,6 @@ def predict_and_save_tile(
     Args:
         tile: JP2 tile to process.
         raw_preds_dir: Directory receiving raw prediction files.
-        path_save_jpg: Directory used for temporary JPEG crops.
         model: Loaded Ultralytics YOLO model.
         window_size: Crop width and height in pixels.
         window_overlap: Target overlap ratio between adjacent crops.
@@ -317,7 +307,6 @@ def predict_and_save_tile(
     tmp_path = raw_preds_dir / f"{tile.stem}.parquet.part"
     gdf, n_crops = predict_tile_obb(
         path_tile=tile,
-        path_save_jpg=path_save_jpg,
         model=model,
         window_size=window_size,
         window_overlap=window_overlap,
@@ -347,7 +336,6 @@ def run_raw_predictions(
         model: YOLO,
         window_size: int,
         window_overlap: float,
-        path_save_jpg: str | Path,
         predict_args: dict | None = None,
         verbose: bool = False,
     ) -> None:
@@ -363,7 +351,6 @@ def run_raw_predictions(
         model: Loaded Ultralytics YOLO model.
         window_size: Crop width and height in pixels.
         window_overlap: Target overlap ratio between adjacent crops.
-        path_save_jpg: Directory used for temporary JPEG crops.
         predict_args: Arguments forwarded to ``model.predict``. Default
             arguments are used when this is ``None``.
         verbose: Whether to display crop-generation information.
@@ -374,8 +361,6 @@ def run_raw_predictions(
     if predict_args is None:
         predict_args = {
             "conf": 0.25,
-            "stream": True,
-            "batch": 8,
             "save": False,
             "verbose": False
         }
@@ -387,7 +372,6 @@ def run_raw_predictions(
     metadata["window_size"] = window_size
     metadata["window_overlap"] = window_overlap
     metadata["input_path"] = str(input_path.resolve())
-    metadata["path_save_jpg"] = str(Path(path_save_jpg).resolve())
     metadata["date"] = str(today)
     metadata["predict_args"] = predict_args.copy()
     metadata["verbose"] = verbose
@@ -409,7 +393,6 @@ def run_raw_predictions(
         predict_and_save_tile(
             tile=tile,
             raw_preds_dir=raw_preds_dir,
-            path_save_jpg=path_save_jpg,
             model=model,
             window_size=window_size,
             window_overlap=window_overlap,
@@ -460,7 +443,6 @@ def resume_run(run_dir: str | Path) -> int | None:
     try:
         input_path = Path(metadata["input_path"])
         config = {
-            "path_save_jpg": metadata["path_save_jpg"],
             "window_size": metadata["window_size"],
             "window_overlap": metadata["window_overlap"],
             "predict_args": metadata["predict_args"],
@@ -586,7 +568,7 @@ def save_results_after_nms(
 def main():
     """Run the complete prediction and post-processing pipeline."""
     try:
-        input_path = Path("data/raw/D33/test_dalles")
+        input_path = Path("data/benchmark_yield/test_dalles")
         
         run_dir = create_run_directory("outputs")
 
@@ -602,8 +584,7 @@ def main():
             run_dir=run_dir, 
             model=model, 
             window_size=2048, 
-            window_overlap=0.2, 
-            path_save_jpg="data/raw/D33/dalle_jpg"
+            window_overlap=0.2
         )
         elapsed = time.perf_counter() - start
         logger.info("Processed all tiles in %.1f s", elapsed)
